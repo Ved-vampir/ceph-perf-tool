@@ -85,7 +85,7 @@ def get_perf_dump(socket_list):
     return res
 
 
-# Returnes selection of given counters from full list
+# Returns selection of given counters from full list
 def select_counters(perf_counters, perf_list):
     res = dict()
     # go by nodes
@@ -117,28 +117,31 @@ def get_table_output(perf_list):
     tab.add_row(header)
     tab.header = header
 
-    groups = set()
+    groups = dict()
     for node, value in perf_list.items():
-        for key in value.keys():
-            groups.add (key)
+        for group, counters in value.items():
+            if group not in groups:
+                groups[group] = set()
+            for counter in counters:
+                groups[group].add(counter)
 
-    # for group_name in groups:
-    #     row = [''] * (len(perf_list.keys()) + 1)
-    #     row[0] = group_name
-    #     tab.add_row(row)
-    #     for counter in counters:
-    #             row = []
-    #             row.append(counter)
-    #             for key, value in perf_list.items():
-    #                 if (group_name in value and counter in value[group_name]):
-    #                     if type(value[group_name][counter]) != type(dict()):
-    #                         row.append(value[group_name][counter])
-    #                     else:
-    #                         s = ""
-    #                         for key1, value1 in value[group_name][counter].items():
-    #                             s = s + key1 + " = " + str(value1) + "\n"
-    #                         row.append(s)
-    #             tab.add_row(row)
+    for group_name, counters in groups.items():
+        row = [''] * (len(perf_list.keys()) + 1)
+        row[0] = group_name
+        tab.add_row(row)
+        for counter in counters:
+                row = []
+                row.append(counter)
+                for key, value in perf_list.items():
+                    if (group_name in value and counter in value[group_name]):
+                        if type(value[group_name][counter]) != type(dict()):
+                            row.append(value[group_name][counter])
+                        else:
+                            s = ""
+                            for key1, value1 in value[group_name][counter].items():
+                                s = s + key1 + " = " + str(value1) + "\n"
+                            row.append(s)
+                tab.add_row(row)
 
     return tab.draw()
 
