@@ -132,6 +132,8 @@ def get_table_output(perf_list):
                             for key1, value1 in value[group_name][counter].items():
                                 s = s + key1 + " = " + str(value1) + "\n"
                             row.append(s)
+                    else:
+                        row.append('')
                 tab.add_row(row)
 
     return tab.draw()
