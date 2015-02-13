@@ -1,11 +1,13 @@
-#!/usr/local/bin/python
+#!/usr/bin/env python
 
 import argparse
 import json
 import os
 import glob
 import subprocess
+from os.path import splitext, basename
 
+CEPH_RUN_PATH = os.getenv("CEPH_RUN_PATH", "/var/run/ceph/")
 
 def main():  
     # parse command line
@@ -42,9 +44,11 @@ def main():
     sock_list = get_socket_list()
 
     if (args.schemaonly):
-        perf_list = get_perf_schema(sock_list)
+        # Returns schemas of listed ceph creatures perfs
+        perf_list = get_perf_data(sock_list, "schema")
     else:
-        perf_list = get_perf_dump(sock_list)
+        # Returns perf dump of listed ceph creatures
+        perf_list = get_perf_data(sock_list, "dump")
         if (perf_counters is not None):
             perf_list = select_counters(perf_counters, perf_list)
 
@@ -56,28 +60,15 @@ def main():
 
 # Returns list of sockets (ceph creatures) on node
 def get_socket_list():
-    sock_list = [sock[14:-5] for sock in glob.glob("/var/run/ceph/*.asok")]
+    sock_list = [splitext(basename(sock))[0] for sock in glob.glob(CEPH_RUN_PATH + "*.asok")]
     return sock_list
 
 
-# Returns schemas of listed ceph creatures perfs
-def get_perf_schema(socket_list):
+# Basic command to return schemas or dumps of listed ceph creatures perfs
+def get_perf_data(socket_list, command):
     res = dict()
     for sock in socket_list:
-        cmd = "ceph --admin-daemon /var/run/ceph/" + sock + ".asok perf schema"
-        PIPE = subprocess.PIPE
-        p = subprocess.Popen(cmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=subprocess.STDOUT)
-        res[sock] = json.loads(p.stdout.read())
-
-    return res
-
-
-
-# Returns perf dump of listed ceph creatures
-def get_perf_dump(socket_list):
-    res = dict()
-    for sock in socket_list:
-        cmd = "ceph --admin-daemon /var/run/ceph/" + sock + ".asok perf dump"
+        cmd = "ceph --admin-daemon %s/%s.asok perf %s" % (CEPH_RUN_PATH, sock, command)
         PIPE = subprocess.PIPE
         p = subprocess.Popen(cmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=subprocess.STDOUT)
         res[sock] = json.loads(p.stdout.read())
@@ -141,6 +132,8 @@ def get_table_output(perf_list):
                             for key1, value1 in value[group_name][counter].items():
                                 s = s + key1 + " = " + str(value1) + "\n"
                             row.append(s)
+                    else:
+                        row.append('')
                 tab.add_row(row)
 
     return tab.draw()
