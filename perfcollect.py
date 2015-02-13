@@ -5,7 +5,9 @@ import json
 import os
 import glob
 import subprocess
+import socket
 from os.path import splitext, basename
+
 
 CEPH_RUN_PATH = os.getenv("CEPH_RUN_PATH", "/var/run/ceph/")
 
@@ -52,10 +54,15 @@ def main():
         if (perf_counters is not None):
             perf_list = select_counters(perf_counters, perf_list)
 
-    if (not args.schemaonly and args.table):
-        print get_table_output(perf_list)
+    if (args.udp is None):
+        # local use
+        if (not args.schemaonly and args.table):
+            print get_table_output(perf_list)
+        else:
+            print get_json_output(perf_list)
+
     else:
-        print get_json_output(perf_list)
+        send_by_udp(args.udp[0], args.udp[1], get_json_output(perf_list))
 
 
 # Returns list of sockets (ceph creatures) on node
@@ -146,8 +153,11 @@ def get_json_output(perf_list):
 
 
 # Send data by udp
-def send_by_udp(host, port):
-    pass
+def send_by_udp(host, port, data):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    if sock.sendto(data, (host, int(port))) != len(data):
+        print "Bad send"
+    # sock.close()
 
 
 # function to read config file
