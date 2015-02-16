@@ -18,7 +18,7 @@ MAX_WAIT_TIME = os.getenv("MAX_WAIT_TIME", 30)    # max answer waiting time in s
 PART_SIZE = os.getenv("PART_SIZE", 4096)    # size of part of packet
 
 
-def listen_thread(port, con_count):
+def listen_thread(port, con_count, filename):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("", port))
     count = 0
@@ -34,7 +34,13 @@ def listen_thread(port, con_count):
             s = data.partition("\n\r")
             all_data[addr[0]] = [int(s[0]), s[2]]
 
-    print all_data
+    if filename is None:
+        for key, value in all_data.items():
+            print value[1]
+    else:
+        with open(filename, 'w') as f:
+            for key, value in all_data.items():
+                f.write(value[1])
 
 
 def main():  
@@ -52,7 +58,7 @@ def main():
     ip_list = get_osds_ips(osd_list)
 
     # start socket listening
-    server = threading.Thread(target=listen_thread, args=(args.port, len(ip_list)))
+    server = threading.Thread(target=listen_thread, args=(args.port, len(ip_list), args.savetofile))
     server.start()
 
     # begin to collect counters
@@ -95,7 +101,7 @@ def get_perfs_from_one_node(path, params):
     return result
 
 
-def get_perfs_from_all_nodes(path, port, user, ip_list, sysmets):
+def get_perfs_from_all_nodes(path, port, user, ip_list, sysmets=False):
     with hide('output', 'running', 'warnings', 'status'):  
         
         # locate myself
@@ -109,7 +115,8 @@ def get_perfs_from_all_nodes(path, port, user, ip_list, sysmets):
         params = "-u %s %i %i" % (ip, port, PART_SIZE)
         if sysmets:
             params += " -m"
-        print tasks.execute(get_perfs_from_one_node, path=path, params=params)
+        
+        tasks.execute(get_perfs_from_one_node, path=path, params=params)
 
         # disconnect_all()
 
