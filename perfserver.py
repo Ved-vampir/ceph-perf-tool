@@ -14,7 +14,8 @@ from fabric.network import disconnect_all
 
 default_user = 'root'  # via him you enter the host
 CEPH_RUN_NAME = os.getenv("CEPH_RUN_NAME", "ceph")  # ceph command name
-MAX_WAIT_TIME = os.getenv("MAX_WAIT_TIME", 30)    # max answer waiting time
+MAX_WAIT_TIME = os.getenv("MAX_WAIT_TIME", 30)    # max answer waiting time in secs
+PART_SIZE = os.getenv("PART_SIZE", 4096)    # size of part of packet
 
 
 def listen_thread(port, con_count):
@@ -24,11 +25,10 @@ def listen_thread(port, con_count):
     all_data = dict()
     while count < con_count:
         
-        data, addr = sock.recvfrom(1024)
-
+        data, addr = sock.recvfrom(PART_SIZE)
         if (addr[0] in all_data):
             all_data[addr[0]][1] += data
-            if (len(data) == all_data[addr][0]):
+            if (len(all_data[addr[0]][1]) == all_data[addr[0]][0]):
                 count += 1
         else:
             s = data.partition("\n\r")
@@ -44,6 +44,7 @@ def main():
     ag.add_argument("--user", "-u", type=str, default=default_user, help="User name for all hosts (root by default)")
     ag.add_argument("--pathtotool", "-t", type=str, required=True, help="Path to remote utility perfcollect.py")
     ag.add_argument("--savetofile", "-s", type=str, help="Save output in file, filename required")
+    ag.add_argument("--sysmetrics", "-m", action="store_true", help="Include info about cpu, memory and disk usage")
     args = ag.parse_args()
 
     # find nodes
@@ -56,9 +57,9 @@ def main():
 
     # begin to collect counters
 
-    get_perfs_from_all_nodes(args.pathtotool, args.port, args.user, ip_list)
-
     print "Now waiting for answer..."
+    get_perfs_from_all_nodes(args.pathtotool, args.port, args.user, ip_list, args.sysmetrics)
+
     server.join(MAX_WAIT_TIME)
 
     # if thread is alive, kill it
@@ -94,7 +95,7 @@ def get_perfs_from_one_node(path, params):
     return result
 
 
-def get_perfs_from_all_nodes(path, port, user, ip_list):
+def get_perfs_from_all_nodes(path, port, user, ip_list, sysmets):
     with hide('output', 'running', 'warnings', 'status'):  
         
         # locate myself
@@ -105,7 +106,9 @@ def get_perfs_from_all_nodes(path, port, user, ip_list):
         env.hosts = ip_list
  
         # prepare args
-        params = "-u %s %i" % (ip, port)
+        params = "-u %s %i %i" % (ip, port, PART_SIZE)
+        if sysmets:
+            params += " -m"
         print tasks.execute(get_perfs_from_one_node, path=path, params=params)
 
         # disconnect_all()

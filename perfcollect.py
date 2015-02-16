@@ -23,6 +23,7 @@ def main():
                         help="Counter collections in format collection_name counter1 counter2 ...")
     ag.add_argument("--schemaonly", "-s", action="store_true", help="Return only schema")
     ag.add_argument("--udp", "-u", type=str, nargs=3, help="Send result by UDP, specify host, port, packet part size")
+    ag.add_argument("--sysmetrics", "-m", action="store_true", help="Add info about cpu, memory and disk usage")
     args = ag.parse_args()
 
     # check some errors in command line
@@ -54,14 +55,22 @@ def main():
         if (perf_counters is not None):
             perf_list = select_counters(perf_counters, perf_list)
 
+    if (args.sysmetrics):
+        import sysmets
+        sm = sysmets.get_system_metrics()
+
     if (args.udp is None):
         # local use
         if (not args.schemaonly and args.table):
             print get_table_output(perf_list)
         else:
+            if (args.sysmetrics):
+                perf_list["system metrics"] = sm
             print get_json_output(perf_list)
 
     else:
+        if (args.sysmetrics):
+            perf_list["system metrics"] = sm
         send_by_udp(args.udp, get_json_output(perf_list))
 
 
@@ -157,9 +166,9 @@ def send_by_udp(conn_opts, data):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     packet = "%i\n\r%s" % (len(data), data)
     b = 0
-    e = conn_opts[2]
-    while b < len (data):
-        block = data[b:b+e]
+    e = int(conn_opts[2])
+    while b < len (packet):
+        block = packet[b:b+e]
         if sock.sendto(block, (conn_opts[0], int(conn_opts[1]))) != len(block):
             print "Bad send"
         b += e
