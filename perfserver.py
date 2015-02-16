@@ -13,25 +13,34 @@ from fabric.network import disconnect_all
 
 
 default_user = 'root'  # via him you enter the host
-CEPH_RUN_NAME = os.getenv("CEPH_RUN_NAME", "ceph")
-MAX_WAIT_TIME = os.getenv("MAX_WAIT_TIME", 1000)
+CEPH_RUN_NAME = os.getenv("CEPH_RUN_NAME", "ceph")  # ceph command name
+MAX_WAIT_TIME = os.getenv("MAX_WAIT_TIME", 30)    # max answer waiting time
 
 
 def listen_thread(port, con_count):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("", port))
     count = 0
+    all_data = dict()
     while count < con_count:
-        # data = bytearray(1024)
+        
         data, addr = sock.recvfrom(1024)
-        print addr, data
-        count += 1
+
+        if (addr[0] in all_data):
+            all_data[addr[0]][1] += data
+            if (len(data) == all_data[addr][0]):
+                count += 1
+        else:
+            s = data.partition("\n\r")
+            all_data[addr[0]] = [int(s[0]), s[2]]
+
+    print all_data
 
 
 def main():  
     # parse command line
     ag = argparse.ArgumentParser(description="Server for collection perf counters from ceph nodes")
-    ag.add_argument("--port", "-p", type=int, default=9090, help="Specify port for udp connection (9090 by default)")
+    ag.add_argument("--port", "-p", type=int, default=9095, help="Specify port for udp connection (9095 by default)")
     ag.add_argument("--user", "-u", type=str, default=default_user, help="User name for all hosts (root by default)")
     ag.add_argument("--pathtotool", "-t", type=str, required=True, help="Path to remote utility perfcollect.py")
     ag.add_argument("--savetofile", "-s", type=str, help="Save output in file, filename required")
@@ -52,6 +61,7 @@ def main():
     print "Now waiting for answer..."
     server.join(MAX_WAIT_TIME)
 
+    # if thread is alive, kill it
     if server.isAlive():
         print "No answer"
         server._Thread__stop()

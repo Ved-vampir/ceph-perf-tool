@@ -22,7 +22,7 @@ def main():
     ag.add_argument("--collection", "-c", type=str, action="append", nargs='+', 
                         help="Counter collections in format collection_name counter1 counter2 ...")
     ag.add_argument("--schemaonly", "-s", action="store_true", help="Return only schema")
-    ag.add_argument("--udp", "-u", type=str, nargs=2, help="Send result by UDP, specify host and port")
+    ag.add_argument("--udp", "-u", type=str, nargs=3, help="Send result by UDP, specify host, port, packet part size")
     args = ag.parse_args()
 
     # check some errors in command line
@@ -62,7 +62,7 @@ def main():
             print get_json_output(perf_list)
 
     else:
-        send_by_udp(args.udp[0], args.udp[1], get_json_output(perf_list))
+        send_by_udp(args.udp, get_json_output(perf_list))
 
 
 # Returns list of sockets (ceph creatures) on node
@@ -152,12 +152,17 @@ def get_json_output(perf_list):
     return json.dumps(perf_list)
 
 
-# Send data by udp
-def send_by_udp(host, port, data):
+# Send data by udp conn_opts = [host, port, part_size]
+def send_by_udp(conn_opts, data):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    if sock.sendto(data, (host, int(port))) != len(data):
-        print "Bad send"
-    # sock.close()
+    packet = "%i\n\r%s" % (len(data), data)
+    b = 0
+    e = conn_opts[2]
+    while b < len (data):
+        block = data[b:b+e]
+        if sock.sendto(block, (conn_opts[0], int(conn_opts[1]))) != len(block):
+            print "Bad send"
+        b += e
 
 
 # function to read config file
