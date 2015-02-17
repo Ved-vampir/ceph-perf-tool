@@ -1,14 +1,16 @@
 #!/usr/bin/env python
+""" Module for system metrics collecting """
 
-import subprocess
 import psutil
+import subprocess
 
 
-# find ceph processes, pids list return
 def get_ceph_proc_list():
+    """ find ceph processes, pids list return"""
     cmd = "ps aux | grep ceph"
     PIPE = subprocess.PIPE
-    p = subprocess.Popen(cmd, shell=True, stdin=PIPE, stdout=PIPE, stderr=subprocess.STDOUT)
+    p = subprocess.Popen(cmd, shell=True, stdin=PIPE,
+                         stdout=PIPE, stderr=subprocess.STDOUT)
     res = p.stdout.read().split("\n")
     pids = dict()
     for r in res:
@@ -22,8 +24,8 @@ def get_ceph_proc_list():
     return pids
 
 
-# get memory, cpu and disk usage for all ceph processes
 def get_system_metrics():
+    """ get memory, cpu and disk usage for all ceph processes"""
     pids = get_ceph_proc_list()
 
     mets = dict()
