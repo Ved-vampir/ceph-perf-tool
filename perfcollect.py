@@ -11,6 +11,7 @@ import subprocess
 from os.path import splitext, basename
 
 
+# <koder>: make a cmd line option with default value
 CEPH_RUN_PATH = os.getenv("CEPH_RUN_PATH", "/var/run/ceph/")
 
 
@@ -53,6 +54,7 @@ def parse_command_args():
     return args
 
 
+# <koder>: change main prototype in same way, as in perfserver
 def main():
     """ Main tool entry point """
     # get command line args
@@ -96,6 +98,7 @@ def main():
     else:
         if args.sysmetrics:
             perf_list["system metrics"] = system_metrics
+        # <koder>: we need to think about compact binary serialization
         send_by_udp(args.udp, get_json_output(perf_list))
 
 
@@ -109,10 +112,12 @@ def get_socket_list():
 def get_perf_data(socket_list, command):
     """ Basic command to return schemas or dumps
         of listed ceph creatures perfs"""
-    res = dict()
+    res = {}
     for sock in socket_list:
         cmd = "ceph --admin-daemon %s/%s.asok perf %s" % \
                 (CEPH_RUN_PATH, sock, command)
+
+        # <koder>: use subprocess.check_output() instead
         PIPE = subprocess.PIPE
         p = subprocess.Popen(cmd, shell=True, stdin=PIPE,
                              stdout=PIPE, stderr=subprocess.STDOUT)
@@ -123,14 +128,15 @@ def get_perf_data(socket_list, command):
 
 def select_counters(perf_counters, perf_list):
     """ Returns selection of given counters from full list"""
-    res = dict()
+    res = {}
+    # <koder>: does this code just copy a two dicts?
     # go by nodes
     for node, value in perf_list.items():
-        res[node] = dict()
+        res[node] = {}
         # go by groups
         for group, counters in perf_counters.items():
             if group in value:
-                res[node][group] = dict()
+                res[node][group] = {}
                 # go by counters
                 for counter in counters:
                     if counter in value[group]:
@@ -155,13 +161,10 @@ def get_table_output(perf_list):
     line_len = len(header)
 
     # select group and counter names
-    groups = dict()
+    groups = {}
     for node, value in perf_list.items():
         for group, counters in value.items():
-            if group not in groups:
-                groups[group] = set()
-            for counter in counters:
-                groups[group].add(counter)
+            groups.setdefault(group, set()).update(counters)
 
     for group_name, counters in groups.items():
         row = [''] * line_len
@@ -183,7 +186,7 @@ def get_table_output(perf_list):
                     else:
                         s = ""
                         for key1, value1 in perf_val.items():
-                            s = s + key1 + " = " + str(value1) + "\n"
+                            s += "{0}={1}\n".format(key1, str(value1))
                         row.append(s)
                 else:
                     row.append('')
@@ -197,15 +200,26 @@ def get_json_output(perf_list):
     return json.dumps(perf_list)
 
 
+# <koder>: attach crc32 to data. It's available in zipfile module
 def send_by_udp(conn_opts, data):
     """ Send data by udp conn_opts = [host, port, part_size]"""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    # <koder>: this code is sencible to size field corruption
+    # <koder>: which may cause a lot of problems
+    # <koder>: pass size field three times and select only if two is same
+    #
+    # <koder>: also add prefix and postfix to reliably define begin and end
+    # <koder>: of data. This allow you to easily recover from
+    # <koder>: broken pransmit
+
     packet = "%i\n\r%s" % (len(data), data)
     b = 0
     e = int(conn_opts[2])
+    addr = (conn_opts[0], int(conn_opts[1]))
+
     while b < len(packet):
         block = packet[b:b+e]
-        if sock.sendto(block, (conn_opts[0], int(conn_opts[1]))) != len(block):
+        if sock.sendto(block, addr) != len(block):
             print "Bad send"
             break
         b += e
