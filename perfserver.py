@@ -4,72 +4,97 @@
 import os
 import sys
 import json
+import Queue
 import socket
 import argparse
 import threading
 import subprocess
+
+
+import psutil
 from fabric import tasks
 from fabric.api import env, run, hide, task
 
 
-# <koder>: make default command line option value
-DEFAULT_USER = 'root'  # via him you enter the host
-
-# <koder>: make a command line options from this params
-# <koder>: and pass them explicitly
-CEPH_RUN_NAME = os.getenv("CEPH_RUN_NAME", "ceph")  # ceph command name
-MAX_WAIT_TIME = os.getenv("MAX_WAIT_TIME", 30)  # max answer waiting time (sec)
-PART_SIZE = os.getenv("PART_SIZE", 4096)    # size of part of packet
-
-
-def listen_thread(port, con_count, filename=None):
+def listen_thread(port, con_count, part_size, result, term_event):
     """ Main listenig thread for socket
         Listen port, while waiting con_count answers
         Write answers to stdout or to file, if it specified """
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", port))
+    sock.settimeout(5)
     count = 0
     all_data = {}
 
     while count < con_count:
 
-        # <koder>: remote_ip, remote_port = addr
-        # <koder>: all this [0][0] doesn't looks really good
-        data, addr = sock.recvfrom(PART_SIZE)
-        if addr[0] in all_data:
-            # <koder>: make shortcut for all_data[addr[0]]
-            all_data[addr[0]][1] += data
-            if len(all_data[addr[0]][1]) == all_data[addr[0]][0]:
-                count += 1
-        else:
-            s = data.partition("\n\r")
-            all_data[addr[0]] = [int(s[0]), s[2]]
+        try:
+            data, addr = sock.recvfrom(part_size)
+            remote_ip, remote_port = addr
 
-    # <koder>: can we move IO outside this thread?
-    if filename is None:
-        for key, value in all_data.items():
-            print value[1]
+            if remote_ip in all_data:
+
+                cur_data = all_data[remote_ip]
+                cur_data[1] += data
+                if len(cur_data[1]) == cur_data[0]:
+                    count += 1
+
+            else:
+                s = data.partition("\n\r")
+                all_data[remote_ip] = [int(s[0]), s[2]]
+
+        except socket.timeout:
+            # no answer yet - check, if server want to kill us
+            if term_event.is_set():
+                break
+
+    # put result in queue without tech info
+    if count == con_count:
+        # if we finished by itself - return all
+        result.put([value[1] for key, value in all_data.items()])
     else:
-        with open(filename, 'w') as f:
-            for key, value in all_data.items():
-                f.write(value[1])
+        # if result is not full, return only full answers
+        result.put([value[1]
+                    for key, value in all_data.items()
+                    if value[0] == len(value[1])])
 
 
 def parse_command_args(argv):
     """ Command line argument parsing """
     ag = argparse.ArgumentParser(description="Server for collecting"
                                              " perf counters from ceph nodes")
-    ag.add_argument("--port", "-p", type=int, default=9095,
+    # block with default values
+    ag.add_argument("--port", "-p", type=int,
+                    default=9095,
                     help="Specify port for udp connection (9095 by default)")
-    ag.add_argument("--user", "-u", type=str, default=DEFAULT_USER,
+    ag.add_argument("--user", "-u", type=str,
+                    default="root",
                     help="User name for all hosts (root by default)")
+    ag.add_argument("--timeout", "-w", type=int,
+                    default=30,
+                    help="Max time in sec waiting for answers (30 by default)")
+    ag.add_argument("--partsize", "-b", type=int,
+                    default=4096,
+                    help="Part size for udp packet (4096 by default)")
+    ag.add_argument("--ceph", "-c", type=str,
+                    default="ceph",
+                    help="Ceph command line command (ceph by default)")
+    # required params
     ag.add_argument("--pathtotool", "-t", type=str, required=True,
                     help="Path to remote utility perfcollect.py")
+    # params with value
     ag.add_argument("--savetofile", "-s", type=str,
                     help="Save output in file, filename required")
+    ag.add_argument("--localip", "-i", type=str,
+                    help="Local ip for udp answer (if you don't specify it,"
+                         " not good net might be used)")
+    # flag params
     ag.add_argument("--sysmetrics", "-m", action="store_true",
                     help="Include info about cpu, memory and disk usage")
+    ag.add_argument("--copytool", "-y", action="store_true",
+                    help="Copy tool to all nodes to path from -t")
+
     return ag.parse_args(argv)
 
 
@@ -79,56 +104,87 @@ def main(argv):
     args = parse_command_args(argv[1:])
 
     # find nodes
-    osd_list = get_osds_list()
-    ip_list = get_osds_ips(osd_list)
+    osd_list = get_osds_list(args.ceph)
+    ip_list = get_osds_ips(osd_list, args.ceph)
+
+    # copy tool, if user want
+    if args.copytool:
+        copy_tool(ip_list, args.pathtotool, args.user)
 
     # start socket listening
+    result = Queue.Queue()
+    term_event = threading.Event()
     server = threading.Thread(target=listen_thread,
-                              args=(args.port, len(ip_list), args.savetofile))
+                              args=(args.port, len(ip_list), args.partsize,
+                                    result, term_event))
     server.start()
 
     # begin to collect counters
 
     print "Now waiting for answer..."
     get_perfs_from_all_nodes(args.pathtotool, args.port, args.user,
-                             ip_list, args.sysmetrics)
+                             ip_list, args.localip, args.partsize,
+                             args.sysmetrics)
 
-    server.join(MAX_WAIT_TIME)
+    server.join(args.timeout)
 
     # if thread is alive, kill it
-    # <koder>: create a control mechanism to force thread to exit
-    # <koder>: like conditional variable, or queue
     if server.isAlive():
+        print "Timeout finish"
+        term_event.set()
+        #server._Thread__stop()
+
+    # proceed returned data
+    try:
+        # the same timeout as in socket (wait for partly info)
+        data = result.get(timeout=5)
+        if args.savetofile is None:
+            for res in data:
+                print res
+        else:
+            with open(args.savetofile, 'w') as f:
+                for res in data:
+                    f.write(res)
+    except Queue.Empty:
         print "No answer"
-        # <koder>: never use such call
-        # <koder>: make thread a daemon and exits
-        server._Thread__stop()
 
 
-def get_osds_list():
+def copy_tool(ip_list, path, user):
+    """ Copy tool to specified ips on path"""
+    tool_name = "perfcollect.py"
+    full_path = os.path.join(path, tool_name)
+    for ip in ip_list:
+        cmd = "scp %s@%s:%s %s" % (user, ip, full_path, tool_name)
+        p = psutil.Popen(cmd, shell=True)
+        p.wait()
+        if p.returncode != 0:
+            print "Unsuccessfull copy to ", ip
+
+
+def get_osds_list(ceph_run_name):
     """ Get list of osds id"""
     # <koder>: replace with psutils
-    cmd = "%s osd ls" % (CEPH_RUN_NAME)
+    cmd = "%s osd ls" % (ceph_run_name)
     PIPE = subprocess.PIPE
-    p = subprocess.Popen(cmd, shell=True, stdin=PIPE,
-                         stdout=PIPE, stderr=subprocess.STDOUT)
+    p = psutil.Popen(cmd, shell=True, stdout=PIPE)
+    res, err = p.communicate()
     osd_list = [osd_id
-                for osd_id in p.stdout.read().split("\n") if osd_id != '']
+                for osd_id in res.split("\n") if osd_id != '']
     return osd_list
 
 
-def get_osds_ips(osd_list):
+def get_osds_ips(osd_list, ceph_run_name):
     """ Get osd's ips """
     # <koder>: replace with psutils
     ips = set()
     PIPE = subprocess.PIPE
     for osd_id in osd_list:
-        cmd = "%s osd find %s" % (CEPH_RUN_NAME, osd_id)
-        p = subprocess.Popen(cmd, shell=True, stdin=PIPE,
-                             stdout=PIPE, stderr=subprocess.STDOUT)
-
-        ip = json.loads(p.stdout.read())["ip"]
-        ips.add(ip.split(":")[0])
+        cmd = "%s osd find %s" % (ceph_run_name, osd_id)
+        p = psutil.Popen(cmd, shell=True, stdout=PIPE)
+        res, err = p.communicate()
+        if err is None:
+            ip = json.loads(res)["ip"]
+            ips.add(ip.split(":")[0])
     return ips
 
 
@@ -141,7 +197,8 @@ def get_perfs_from_one_node(path, params):
     return result
 
 
-def get_perfs_from_all_nodes(path, port, user, ip_list, sysmets=False):
+def get_perfs_from_all_nodes(path, port, user, ip_list, local_ip,
+                             part_size, sysmets=False):
     """ Start tool from path on every ip in ip_list
         Access by user, answer on port
         Return system metrics also, if sysmets=True """
@@ -149,16 +206,15 @@ def get_perfs_from_all_nodes(path, port, user, ip_list, sysmets=False):
     with hide('output', 'running', 'warnings', 'status'):
 
         # locate myself
-        # <koder>: you know - this might not works. We need to define more
-        # appropriate code to define ip or, better, request user for it
-        local_ip = socket.gethostbyname_ex(socket.gethostname())[2][0]
+        if local_ip is None:
+            local_ip = socket.gethostbyname_ex(socket.gethostname())[2][0]
 
         # setup fabric
         env.user = user
         env.hosts = ip_list
 
         # prepare args
-        params = "-u %s %i %i" % (local_ip, port, PART_SIZE)
+        params = "-u %s %i %i" % (local_ip, port, part_size)
         if sysmets:
             params += " -m"
 
