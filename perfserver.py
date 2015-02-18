@@ -13,7 +13,10 @@ import subprocess
 
 import psutil
 from fabric import tasks
-from fabric.api import env, run, hide, task
+from fabric.api import env, run, hide, task, parallel
+from fabric.network import disconnect_all
+
+import packet
 
 
 def listen_thread(port, con_count, part_size, result, term_event):
@@ -27,37 +30,45 @@ def listen_thread(port, con_count, part_size, result, term_event):
     count = 0
     all_data = {}
 
-    while count < con_count:
+    while True: #count < con_count:
 
         try:
             data, addr = sock.recvfrom(part_size)
             remote_ip, remote_port = addr
 
-            if remote_ip in all_data:
+            if remote_ip not in all_data:
+                all_data[remote_ip] = packet.Packet()
 
-                cur_data = all_data[remote_ip]
-                cur_data[1] += data
-                if len(cur_data[1]) == cur_data[0]:
-                    count += 1
+            ready = all_data[remote_ip].new_packet(data)
 
-            else:
-                s = data.partition("\n\r")
-                all_data[remote_ip] = [int(s[0]), s[2]]
+            if ready is not None:
+                result.put(ready)
+
+            # if remote_ip in all_data:
+
+            #     cur_data = all_data[remote_ip]
+            #     cur_data[1] += data
+            #     if len(cur_data[1]) == cur_data[0]:
+            #         count += 1
+
+            # else:
+            #     s = data.partition("\n\r")
+            #     all_data[remote_ip] = [int(s[0]), s[2]]
 
         except socket.timeout:
             # no answer yet - check, if server want to kill us
             if term_event.is_set():
                 break
 
-    # put result in queue without tech info
-    if count == con_count:
-        # if we finished by itself - return all
-        result.put([value[1] for key, value in all_data.items()])
-    else:
-        # if result is not full, return only full answers
-        result.put([value[1]
-                    for key, value in all_data.items()
-                    if value[0] == len(value[1])])
+    # # put result in queue without tech info
+    # if count == con_count:
+    #     # if we finished by itself - return all
+    #     result.put([value[1] for key, value in all_data.items()])
+    # else:
+    #     # if result is not full, return only full answers
+    #     result.put([value[1]
+    #                 for key, value in all_data.items()
+    #                 if value[0] == len(value[1])])
 
 
 def parse_command_args(argv):
@@ -117,36 +128,44 @@ def main(argv):
     server = threading.Thread(target=listen_thread,
                               args=(args.port, len(ip_list), args.partsize,
                                     result, term_event))
-    server.start()
-
-    # begin to collect counters
-
-    print "Now waiting for answer..."
-    get_perfs_from_all_nodes(args.pathtotool, args.port, args.user,
-                             ip_list, args.localip, args.partsize,
-                             args.sysmetrics)
-
-    server.join(args.timeout)
-
-    # if thread is alive, kill it
-    if server.isAlive():
-        print "Timeout finish"
-        term_event.set()
-        #server._Thread__stop()
-
-    # proceed returned data
     try:
-        # the same timeout as in socket (wait for partly info)
-        data = result.get(timeout=5)
-        if args.savetofile is None:
-            for res in data:
-                print res
-        else:
-            with open(args.savetofile, 'w') as f:
-                for res in data:
-                    f.write(res)
-    except Queue.Empty:
-        print "No answer"
+        server.start()
+
+        # begin to collect counters
+
+        print "Now waiting for answer..."
+        tools = threading.Thread(target=get_perfs_from_all_nodes,
+                                 args=(args.pathtotool, args.port, args.user,
+                                       ip_list, args.localip, args.partsize,
+                                       args.sysmetrics))
+        tools.start()
+
+        while True:
+            # proceed returned data
+            data = result.get()
+            if args.savetofile is None:
+                print data
+                #for res in data:
+                #    print res
+            else:
+                with open(args.savetofile, 'a') as f:
+                    for res in data:
+                        f.write(res)
+    except KeyboardInterrupt:
+        term_event.set()
+        send_die_to_tools(ip_list, args.port)
+#        tools.join()
+    else:
+        term_event.set()
+        send_die_to_tools(ip_list, args.port)
+#        tools.join()
+
+
+def send_die_to_tools(ip_list, port):
+    """ Send message to die to tools"""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    for ip in ip_list:
+        sock.sendto("Time to die", (ip, port))
 
 
 def copy_tool(ip_list, path, user):
@@ -154,7 +173,7 @@ def copy_tool(ip_list, path, user):
     tool_name = "perfcollect.py"
     full_path = os.path.join(path, tool_name)
     for ip in ip_list:
-        cmd = "scp %s@%s:%s %s" % (user, ip, full_path, tool_name)
+        cmd = "scp %s %s@%s:%s" % (tool_name, user, ip, full_path)
         p = psutil.Popen(cmd, shell=True)
         p.wait()
         if p.returncode != 0:
@@ -189,12 +208,12 @@ def get_osds_ips(osd_list, ceph_run_name):
 
 
 @task
+@parallel
 def get_perfs_from_one_node(path, params):
     """ Start local tool on node with specified params """
     # <koder>: don't we need to copy this file to node first?
     cmd = "python %s/perfcollect.py %s" % (path, params)
-    result = run(cmd)
-    return result
+    run(cmd)
 
 
 def get_perfs_from_all_nodes(path, port, user, ip_list, local_ip,
@@ -214,12 +233,12 @@ def get_perfs_from_all_nodes(path, port, user, ip_list, local_ip,
         env.hosts = ip_list
 
         # prepare args
-        params = "-u %s %i %i" % (local_ip, port, part_size)
+        params = "-u %s %i %i -w %i" % (local_ip, port, part_size, 5)
         if sysmets:
             params += " -m"
 
         tasks.execute(get_perfs_from_one_node, path=path, params=params)
-
+        disconnect_all()
 
 if __name__ == '__main__':
     exit(main(sys.argv))
