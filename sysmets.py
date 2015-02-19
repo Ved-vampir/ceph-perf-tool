@@ -9,6 +9,34 @@ import subprocess
 import psutil
 
 
+# improved version
+def get_ceph_proc_list1():
+    """ find ceph processes, pids list return"""
+    pids = {}
+    for proc in psutil.process_iter():
+        try:
+            pinfo = proc.as_dict(attrs=['pid', 'name', 'cmdline'])
+        except psutil.NoSuchProcess:
+            pass
+        else:
+            if "ceph" in pinfo['name']:
+
+                i_flag = False
+                name = ""
+                for arg in pinfo['cmdline']:
+                    # find for ceph creature name in command line
+                    if i_flag:
+                        name = arg
+                        break
+                    if arg == "-i":
+                        i_flag = True
+
+                name = "%s.%s" % (pinfo['name'], name)
+                pids[name] = pinfo['pid']
+
+    return pids
+
+
 def get_ceph_proc_list():
     """ find ceph processes, pids list return"""
 
@@ -37,7 +65,7 @@ def get_system_metrics():
     """ get memory, cpu and disk usage for all ceph processes"""
 
     mets = {}
-    for name, pid in get_ceph_proc_list().items():
+    for name, pid in get_ceph_proc_list1().items():
         p = psutil.Process(pid)
         mets[name] = p.as_dict(attrs=['io_counters',
                                       'cpu_times',
@@ -46,3 +74,8 @@ def get_system_metrics():
                                       'memory_percent'])
 
     return mets
+
+
+
+if __name__ == '__main__':
+    print get_system_metrics()
