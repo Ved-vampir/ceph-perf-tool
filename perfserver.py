@@ -141,24 +141,25 @@ def main(argv):
         tools.start()
 
         while True:
+            # without any timeout KeyboardInterrupt will not raise
+            really_big_timeout = sys.maxint
+            data = result.get(timeout=really_big_timeout)
             # proceed returned data
-            data = result.get()
             if args.savetofile is None:
                 print data
-                #for res in data:
-                #    print res
             else:
                 with open(args.savetofile, 'a') as f:
-                    for res in data:
-                        f.write(res)
+                    f.write(data)
+    # my not very good way to exit :(
     except KeyboardInterrupt:
+        print "Finalization..."
+        # kill our thread
         term_event.set()
+        # kill remote tool (if it is not killed yet)
         send_die_to_tools(ip_list, args.port)
-#        tools.join()
     else:
         term_event.set()
         send_die_to_tools(ip_list, args.port)
-#        tools.join()
 
 
 def send_die_to_tools(ip_list, port):
@@ -212,8 +213,13 @@ def get_osds_ips(osd_list, ceph_run_name):
 def get_perfs_from_one_node(path, params):
     """ Start local tool on node with specified params """
     # <koder>: don't we need to copy this file to node first?
-    cmd = "python %s/perfcollect.py %s" % (path, params)
-    run(cmd)
+    # <I>: not always, separate func created
+    try:
+        cmd = "python %s/perfcollect.py %s" % (path, params)
+        run(cmd)
+    except KeyboardInterrupt:
+        # way to stop server
+        return
 
 
 def get_perfs_from_all_nodes(path, port, user, ip_list, local_ip,
@@ -222,7 +228,7 @@ def get_perfs_from_all_nodes(path, port, user, ip_list, local_ip,
         Access by user, answer on port
         Return system metrics also, if sysmets=True """
     # supress fabric output
-    with hide('output', 'running', 'warnings', 'status'):
+    with hide('output', 'running', 'warnings', 'status', 'aborts'):
 
         # locate myself
         if local_ip is None:
