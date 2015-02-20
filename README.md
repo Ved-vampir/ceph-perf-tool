@@ -25,6 +25,10 @@ Data is sent by udp on specified by used (or 9095 by default) port - take care a
 
 ###Local tool perfcollect.py
 
+This tool can be used localy for collection performance info from local ceph instances. Also it is used as client, which can send this info by udp to server - by this way we can collect data from all nodes.
+
+Tool has two modes: one call - one output and one call - multiply output (collecting of performance info by timer)
+
     perfcollect.py [-h] [--json] [--table] [--schemaonly] [--sysmetrics]
                       [--config CONFIG]
                       [--collection COLLECTION [COLLECTION ...]]
@@ -59,6 +63,14 @@ Data is sent by udp on specified by used (or 9095 by default) port - take care a
 
 ###Collecting server perfserver.py
 
+Server for working with all nodes. Server must be started from ceph node, because it find other nodes asking ceph about them.
+
+Server starts perfcollect tool on each ceph node and communicate with it. So, you need have this tool and it's libs (if you want get system metrics) on each node on given in -t argument path. If you don't want copy it by yourself, use -y argument (scp command runs).
+
+Server must have password-less ssh access for other nodes. Specify user, if you have no access to root.
+
+Exit from server now is possible only via Ctrl+C (KeyboardInterrupt)
+
     perfserver.py [-h] [--port PORT] [--user USER] [--timeout TIMEOUT]
                      [--partsize PARTSIZE] [--ceph CEPH] --pathtotool
                      PATHTOTOOL [--savetofile SAVETOFILE] [--localip LOCALIP]
@@ -89,4 +101,11 @@ Data is sent by udp on specified by used (or 9095 by default) port - take care a
 
 ##Example
 
-    python perfserver.py -t ~ -p 9096 -y
+Start server on 9096 port with coping of tool to home root directory, get counters difference and others values by default
+
+    python perfserver.py -t ~ -p 9096 -y -d
+
+Start server on default port with system metrics getting and file output, get result every 30 sec
+
+    python perfserver.py -t ~ -w 30 -s test.out -m
+

@@ -27,11 +27,15 @@ def parse_command_args(argv):
                     default=True,
                     help="Output in json format (true by default)")
     ag.add_argument("--table", "-t", action="store_true",
-                    help="Output in table format (python-texttable required)")
+                    help="Output in table format (python-texttable required,"
+                         " work only in local mode and not for schema)")
     ag.add_argument("--schemaonly", "-s", action="store_true",
                     help="Return only schema")
     ag.add_argument("--sysmetrics", "-m", action="store_true",
                     help="Add info about cpu, memory and disk usage")
+    ag.add_argument("--diff", "-d", action="store_true",
+                    help="Return counters difference instead of value"
+                         " (work only in timeout mode)")
     # strings
     ag.add_argument("--config", "-g", type=str,
                     help="Use it, if you want upload needed counter names from"
@@ -88,7 +92,9 @@ def main(argv):
 
     # if in cycle mode with udp output - start waiting for die
     if args.udp is not None and args.timeout is not None:
-        die_event = wait_for_die(args.udp[0], args.udp[1])
+        die_event = wait_for_die(args.udp[0], int(args.udp[1])+1)
+
+    cache = None
 
     while True:
         # get metrics by timer
@@ -102,7 +108,7 @@ def main(argv):
                 perf_list = select_counters(perf_counters, perf_list)
 
         if args.sysmetrics:
-            system_metrics = sysmets.get_system_metrics()
+            system_metrics = sysmets.get_system_metrics(args.runpath)
 
         if args.udp is None:
             # local use
@@ -111,12 +117,19 @@ def main(argv):
             else:
                 if args.sysmetrics:
                     perf_list["system metrics"] = system_metrics
+                if args.diff:
+                    new_data = perf_list
+                    perf_list = values_difference(cache, new_data)
+                    cache = new_data
                 print get_json_output(perf_list)
 
         else:
             if args.sysmetrics:
                 perf_list["system metrics"] = system_metrics
-            # <koder>: we need to think about compact binary serialization
+            if args.diff:
+                new_data = perf_list
+                perf_list = values_difference(cache, new_data)
+                cache = new_data
             send_by_udp(args.udp, get_json_output(perf_list))
 
         if args.timeout is None:
@@ -125,6 +138,28 @@ def main(argv):
             if args.udp is not None and die_event.is_set():
                 break
             time.sleep(args.timeout)
+
+
+def values_difference(cache, current):
+    """ Calculate difference between old values and new"""
+    if cache is None:
+        return {"No later values" : "first iteration"}
+    diff = {}
+    for block, values in cache.items():
+        diff[block] = {}
+        for group, counters in values.items():
+            diff[block][group] = {}
+            for counter, value in counters.items():
+                new_data = current[block][group][counter]
+                # check for complex counters
+                if  not isinstance(value, dict):
+                    diff[block][group][counter] = new_data - value
+                else:
+                    diff[block][group][counter] = {}
+                    for k, v in value.items():
+                        diff[block][group][counter][k] = new_data[k] - v
+    return diff
+
 
 
 def get_socket_list(path):
@@ -142,13 +177,6 @@ def get_perf_data(socket_list, command, path):
         cmd = "ceph --admin-daemon %s/%s.asok perf %s" % \
                 (path, sock, command)
 
-        # <koder>: use subprocess.check_output() instead
-        # <I>: look cool, but don't work on fuel nodes
-        # (new in python 2.7, but 2.6 I have there)
-        #
-        # out = subprocess.check_output(cmd)
-        # res[sock] = json.loads(out)
-
         PIPE = subprocess.PIPE
         p = subprocess.Popen(cmd, shell=True, stdin=PIPE,
                              stdout=PIPE, stderr=subprocess.STDOUT)
@@ -160,10 +188,6 @@ def get_perf_data(socket_list, command, path):
 def select_counters(perf_counters, perf_list):
     """ Returns selection of given counters from full list"""
     res = {}
-    # <koder>: does this code just copy a two dicts?
-    # <I>: no, it select from perf_list counters, described in perf_counters
-    # perf_list contains all counters, which perf dump returns
-    # this func is used, if user want only specified list of counters
 
     # go by nodes
     for node, value in perf_list.items():
@@ -235,17 +259,9 @@ def get_json_output(perf_list):
     return json.dumps(perf_list)
 
 
-# <koder>: attach crc32 to data. It's available in zipfile module
 def send_by_udp(conn_opts, data):
     """ Send data by udp conn_opts = [host, port, part_size]"""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    # <koder>: this code is sencible to size field corruption
-    # <koder>: which may cause a lot of problems
-    # <koder>: pass size field three times and select only if two is same
-    #
-    # <koder>: also add prefix and postfix to reliably define begin and end
-    # <koder>: of data. This allow you to easily recover from
-    # <koder>: broken pransmit
 
     # prepare data
     data_len = "%i\n\r" % len(data)
