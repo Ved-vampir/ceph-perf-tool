@@ -6,6 +6,7 @@ import sys
 import json
 import Queue
 import socket
+import logging
 import argparse
 import threading
 import subprocess
@@ -19,6 +20,9 @@ from fabric.network import disconnect_all
 import packet
 
 
+LOGGER_NAME = "io-perf-tool"
+
+
 def listen_thread(port, part_size, result, term_event):
     """ Main listenig thread for socket
         Listen port, while waiting con_count answers
@@ -26,17 +30,16 @@ def listen_thread(port, part_size, result, term_event):
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", port))
-    sock.settimeout(5)
+    sock.settimeout(0.5)
     all_data = {}
 
     while True: 
 
         try:
-            data, addr = sock.recvfrom(part_size)
-            remote_ip, remote_port = addr
+            data, (remote_ip, remote_port) = sock.recvfrom(part_size)
 
             if remote_ip not in all_data:
-                all_data[remote_ip] = packet.Packet()
+                all_data[remote_ip] = packet.Packet(LOGGER_NAME)
 
             ready = all_data[remote_ip].new_packet(data)
 
@@ -45,6 +48,9 @@ def listen_thread(port, part_size, result, term_event):
 
         except socket.timeout:
             # no answer yet - check, if server want to kill us
+            if term_event.is_set():
+                break
+        else:
             if term_event.is_set():
                 break
 
@@ -70,12 +76,15 @@ def parse_command_args(argv):
                     default="ceph",
                     help="Ceph command line command (ceph by default)")
     # required params
-    ag.add_argument("--pathtotool", "-t", type=str, required=True,
+    ag.add_argument("--path-to-tool", "-t", type=str, required=True,
+                    metavar="PATH_TO_TOOL", dest="pathtotool",
                     help="Path to remote utility perfcollect.py")
     # params with value
-    ag.add_argument("--savetofile", "-s", type=str,
+    ag.add_argument("--save-to-file", "-s", type=str,
+                    metavar="FILENAME", dest="savetofile",
                     help="Save output in file, filename required")
     ag.add_argument("--localip", "-i", type=str,
+                    metavar="IP",
                     help="Local ip for udp answer (if you don't specify it,"
                          " not good net might be used)")
     # flag params
@@ -90,8 +99,25 @@ def parse_command_args(argv):
     return ag.parse_args(argv)
 
 
+def define_logger():
+    """ Initialization of logger"""
+    logger = logging.getLogger(LOGGER_NAME)
+    logger.setLevel(logging.INFO)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    logger.addHandler(ch)
+
+    log_format = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+    formatter = logging.Formatter(log_format,
+                                  "%H:%M:%S")
+    ch.setFormatter(formatter)
+    return logger
+
+
 def main(argv):
     """ Server starts from here """
+    # start logging
+    logger = define_logger()
     # parse command line
     args = parse_command_args(argv[1:])
 
@@ -118,7 +144,7 @@ def main(argv):
 
         # begin to collect counters
 
-        print "Now waiting for answer... Use Ctrl+C for exit."
+        logger.info("Now waiting for answer... Use Ctrl+C for exit.")
 
         # supress connection to localhost
         cmd = prepare_tool_cmd(args)
@@ -136,13 +162,13 @@ def main(argv):
             data = result.get(timeout=really_big_timeout)
             # proceed returned data
             if args.savetofile is None:
-                print data
+                logger.info(data)
             else:
                 with open(args.savetofile, 'a') as f:
                     f.write(data)
     # my not very good way to exit :(
     except KeyboardInterrupt:
-        print "Finalization..."
+        logger.info("Finalization...")
         # kill our thread
         term_event.set()
         # kill remote tool (if it is not killed yet)
@@ -169,7 +195,8 @@ def copy_tool(ip_list, path, user):
             p = psutil.Popen(cmd, shell=True)
             p.wait()
             if p.returncode != 0:
-                print "Unsuccessfull copy to ", ip
+                logger = logging.getLogger(LOGGER_NAME)
+                logger.error("Unsuccessfull copy to %s", ip)
 
 
 def get_osds_list(ceph_run_name):
@@ -229,7 +256,7 @@ def prepare_tool_cmd(args):
         local_ip = socket.gethostbyname_ex(socket.gethostname())[2][0]
 
     # prepare args
-    params = "-u %s %i %i -w %i" % (local_ip, port, part_size, timeout)
+    params = "-u UDP://%s:%s/%s -w %i" % (local_ip, port, part_size, timeout)
     if sysmets:
         params += " -m"
     if get_diff:
@@ -241,6 +268,8 @@ def prepare_tool_cmd(args):
 
 def start_tool_localy(cmd):
     """ Start tool localy on current node """
+    psutil.Popen(cmd, shell=True)
+
 
 @task
 @parallel

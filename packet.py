@@ -2,9 +2,12 @@
 """ Protocol class """
 
 import binascii
+import logging
 
-
-
+# packet has format:
+# begin_data_prefixSIZE\n\nDATAend_data_postfix
+# packet part has format:
+# SIZE\n\rDATA
 
 class Packet(object):
     """ Class proceed packet by protocol"""
@@ -15,8 +18,9 @@ class Packet(object):
     # data_len
     # prefix
     # postfix
+    #logger_name
 
-    def __init__(self):
+    def __init__(self, logger_name):
         # preinit
         self.is_begin = False
         self.is_end = False
@@ -25,6 +29,7 @@ class Packet(object):
         self.data_len = None
         self.prefix = "begin_data_prefix"
         self.postfix = "end_data_postfix"
+        self.logger_name = logger_name
 
 
     def new_packet(self, part):
@@ -32,9 +37,8 @@ class Packet(object):
         # proceed packet
         try:
             # get size
-            tmp = part.partition("\n\r")
-            local_size = int(tmp[0])
-            part = tmp[2]
+            local_size_s, _, part = part.partition("\n\r")
+            local_size = int(local_size_s)
 
             # find prefix
             begin = part.find(self.prefix)
@@ -47,13 +51,11 @@ class Packet(object):
                 self.is_end = False
                 self.data = ""
                 # get size
-                tmp = part.partition("\n\r")
-                self.data_len = int(tmp[0])
-                part = tmp[2]                
+                data_len_s, _, part = part.partition("\n\r")
+                self.data_len = int(data_len_s)
                 # get crc
-                tmp = part.partition("\n\r")
-                self.crc = int(tmp[0])
-                part = tmp[2]
+                crc_s, _, part = part.partition("\n\r")
+                self.crc = int(crc_s)
 
             # bad size?
             if local_size != self.data_len:
@@ -78,14 +80,17 @@ class Packet(object):
                 return None
 
 
-        except Exception:
+        except Exception as e:
             # if something wrong - skip packet
+            logger = logging.getLogger(self.logger_name)
+            logger.warning("Packet skipped: %s", e)
             self.is_begin = False
             self.is_end = False
             return None
-        else:
-            # if something wrong - skip packet
+        except:
+            # if something at all wrong - skip packet
+            logger = logging.getLogger(self.logger_name)
+            logger.warning("Packet skipped: something is wrong")
             self.is_begin = False
             self.is_end = False
             return None
-

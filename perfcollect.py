@@ -7,11 +7,18 @@ import json
 import glob
 import time
 import socket
+import logging
+import urlparse
 import argparse
 import binascii
 import threading
 import subprocess
 from os.path import splitext, basename
+
+from daemonize import Daemonize
+
+
+LOGGER_NAME = "io-perf-tool"
 
 
 def parse_command_args(argv):
@@ -29,7 +36,8 @@ def parse_command_args(argv):
     ag.add_argument("--table", "-t", action="store_true",
                     help="Output in table format (python-texttable required,"
                          " work only in local mode and not for schema)")
-    ag.add_argument("--schemaonly", "-s", action="store_true",
+    ag.add_argument("--schema-only", "-s", action="store_true",
+                    dest="schemaonly",
                     help="Return only schema")
     ag.add_argument("--sysmetrics", "-m", action="store_true",
                     help="Add info about cpu, memory and disk usage")
@@ -38,14 +46,17 @@ def parse_command_args(argv):
                          " (work only in timeout mode)")
     # strings
     ag.add_argument("--config", "-g", type=str,
+                    metavar="FILENAME",
                     help="Use it, if you want upload needed counter names from"
                     " file (json format, .counterslist as example)")
     ag.add_argument("--collection", "-c", type=str, action="append", nargs='+',
+                    metavar="COUNTER_GROUP COUNTER1 COUNTER2",
                     help="Counter collections in format "
                          "collection_name counter1 counter2 ...")
-    ag.add_argument("--udp", "-u", type=str, nargs=3,
+    ag.add_argument("--remote", "-u", type=str,
+                    metavar="UDP://IP:PORT/SIZE",
                     help="Send result by UDP, "
-                         "specify host, port, packet part size")
+                         "specify host, port, packet part size in bytes")
     ag.add_argument("--runpath", "-r", type=str,
                     default="/var/run/ceph/",
                     help="Path to ceph sockets (/var/run/ceph/ by default)")
@@ -57,25 +68,45 @@ def parse_command_args(argv):
     args = ag.parse_args(argv)
 
     # check some errors in command line
+    logger = logging.getLogger(LOGGER_NAME)
     if args.collection is not None:
         for lst in args.collection:
             if len(lst) < 2:
-                print "Collection argument must contain at least one counter"
+                logger.error("Collection argument must contain at least one counter")
                 return None
     if args.config is not None and args.collection is not None:
-        print "You cannot add counters from config and command line together"
+        logger.error("You cannot add counters from config and command line together")
         return None
 
     return args
 
 
-def main(argv):
+def define_logger():
+    """ Initialization of logger"""
+    logger = logging.getLogger(LOGGER_NAME)
+    logger.setLevel(logging.INFO)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    logger.addHandler(ch)
+
+    log_format = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
+    formatter = logging.Formatter(log_format,
+                                  "%H:%M:%S")
+    ch.setFormatter(formatter)
+    return logger
+
+
+def main():
     """ Main tool entry point """
+    # init logger
+    logger = define_logger()
     # get command line args
-    args = parse_command_args(argv[1:])
+    args = parse_command_args(sys.argv[1:])
     if args is None:
-        print "Program terminated because of command line errors"
+        logger.error("Program terminated because of command line errors")
         exit(1)
+    # prepare info for send
+    sender = get_sender_object(args.remote)
 
     # prepare info about needed counters
     if args.config is not None:
@@ -91,8 +122,9 @@ def main(argv):
         import sysmets
 
     # if in cycle mode with udp output - start waiting for die
-    if args.udp is not None and args.timeout is not None:
-        die_event = wait_for_die(args.udp[0], int(args.udp[1])+1)
+    if sender is not None and args.timeout is not None:
+        host, port = sender.sendto
+        die_event = wait_for_die(host, port+1)
 
     cache = None
 
@@ -110,7 +142,7 @@ def main(argv):
         if args.sysmetrics:
             system_metrics = sysmets.get_system_metrics(args.runpath)
 
-        if args.udp is None:
+        if sender is None:
             # local use
             if not args.schemaonly and args.table:
                 print get_table_output(perf_list)
@@ -130,14 +162,25 @@ def main(argv):
                 new_data = perf_list
                 perf_list = values_difference(cache, new_data)
                 cache = new_data
-            send_by_udp(args.udp, get_json_output(perf_list))
+            send_by_udp(sender, get_json_output(perf_list))
 
         if args.timeout is None:
             break
         else:
-            if args.udp is not None and die_event.is_set():
+            if sender is not None and die_event.is_set():
                 break
             time.sleep(args.timeout)
+
+
+def get_sender_object(url):
+    """ Create connection object from input udp string """
+    if url is None:
+        return None
+    data = urlparse.urlparse(url)
+    sender = type('Sender', (), {})
+    sender.sendto = (data.hostname, data.port)
+    sender.size = data.path.strip("/")
+    return sender
 
 
 def values_difference(cache, current):
@@ -269,17 +312,15 @@ def send_by_udp(conn_opts, data):
     packet = "%s%send_data_postfix" % (header, data)
 
     partheader_len = len(data_len)
-    part_size = int(conn_opts[2])
+    part_size = int(conn_opts.size)
 
     b = 0
     e = part_size - partheader_len
 
-    addr = (conn_opts[0], int(conn_opts[1]))
-
     while b < len(packet):
         block = packet[b:b+e]
         part = data_len + block
-        if sock.sendto(part, addr) != len(part):
+        if sock.sendto(part, conn_opts.sendto) != len(part):
             print "Bad send"
             break
         b += e
@@ -315,13 +356,15 @@ def listening_thread(host, port, die_event):
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind(("0.0.0.0", port))
     while True:
-        data, addr = sock.recvfrom(256)
-        remote_ip, remote_port = addr
+        data, (remote_ip, remote_port) = sock.recvfrom(256)
         if remote_ip == host:
-            print "Stopped by server with message: ", data
+            logger = logging.getLogger(LOGGER_NAME)
+            logger.info("Stopped by server with message: %s", data)
             die_event.set()
             break
 
 
 if __name__ == '__main__':
-    exit(main(sys.argv))
+    pid = "/tmp/perfcollect_app%i.pid" % time.time()
+    daemon = Daemonize(app="perfcollect_app", pid=pid, action=main)
+    daemon.start()
