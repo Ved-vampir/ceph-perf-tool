@@ -6,16 +6,15 @@ import sys
 import json
 import glob
 import time
-import socket
 import logging
-import urlparse
 import argparse
-import binascii
 import threading
 import subprocess
 from os.path import splitext, basename
 
 from daemonize import Daemonize
+
+import sender
 
 
 LOGGER_NAME = "io-perf-tool"
@@ -106,7 +105,8 @@ def main():
         logger.error("Program terminated because of command line errors")
         exit(1)
     # prepare info for send
-    sender = get_sender_object(args.remote)
+    if args.remote is not None:
+        udp_sender = sender.Sender(url=args.remote)
 
     # prepare info about needed counters
     if args.config is not None:
@@ -122,9 +122,8 @@ def main():
         import sysmets
 
     # if in cycle mode with udp output - start waiting for die
-    if sender is not None and args.timeout is not None:
-        host, port = sender.sendto
-        die_event = wait_for_die(host, port+1)
+    if args.remote is not None and args.timeout is not None:
+        die_event = wait_for_die(udp_sender)
 
     cache = None
 
@@ -142,7 +141,7 @@ def main():
         if args.sysmetrics:
             system_metrics = sysmets.get_system_metrics(args.runpath)
 
-        if sender is None:
+        if args.remote is None:
             # local use
             if not args.schemaonly and args.table:
                 print get_table_output(perf_list)
@@ -162,25 +161,14 @@ def main():
                 new_data = perf_list
                 perf_list = values_difference(cache, new_data)
                 cache = new_data
-            send_by_udp(sender, get_json_output(perf_list))
+            send_by_udp(udp_sender, get_json_output(perf_list))
 
         if args.timeout is None:
             break
         else:
-            if sender is not None and die_event.is_set():
+            if args.remote is not None and die_event.is_set():
                 break
             time.sleep(args.timeout)
-
-
-def get_sender_object(url):
-    """ Create connection object from input udp string """
-    if url is None:
-        return None
-    data = urlparse.urlparse(url)
-    sender = type('Sender', (), {})
-    sender.sendto = (data.hostname, data.port)
-    sender.size = data.path.strip("/")
-    return sender
 
 
 def values_difference(cache, current):
@@ -302,28 +290,9 @@ def get_json_output(perf_list):
     return json.dumps(perf_list)
 
 
-def send_by_udp(conn_opts, data):
-    """ Send data by udp conn_opts = [host, port, part_size]"""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-
-    # prepare data
-    data_len = "%i\n\r" % len(data)
-    header = "begin_data_prefix%s%s\n\r" % (data_len, binascii.crc32(data))
-    packet = "%s%send_data_postfix" % (header, data)
-
-    partheader_len = len(data_len)
-    part_size = int(conn_opts.size)
-
-    b = 0
-    e = part_size - partheader_len
-
-    while b < len(packet):
-        block = packet[b:b+e]
-        part = data_len + block
-        if sock.sendto(part, conn_opts.sendto) != len(part):
-            print "Bad send"
-            break
-        b += e
+def send_by_udp(udp_sender, data):
+    """ Send data by udp"""
+    udp_sender.send_by_protocol(data)
 
 
 def get_perfcounters_list_from_config(config):
@@ -342,21 +311,21 @@ def get_perfcounters_list_from_sysargs(args):
     return pc
 
 
-def wait_for_die(host, port):
+def wait_for_die(udp_sender):
     """ Create socket in separate thread for to wait die signal"""
     die_event = threading.Event()
     server = threading.Thread(target=listening_thread,
-                              args=(host, port, die_event))
+                              args=(udp_sender.sendto, die_event))
     server.start()
     return die_event
 
 
 def listening_thread(host, port, die_event):
     """ Wait message from parent and set event to die """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("0.0.0.0", port))
+    die_sender = sender.Sender(port)
+
     while True:
-        data, (remote_ip, remote_port) = sock.recvfrom(256)
+        data, remote_ip = die_sender.recv()
         if remote_ip == host:
             logger = logging.getLogger(LOGGER_NAME)
             logger.info("Stopped by server with message: %s", data)

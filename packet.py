@@ -17,14 +17,15 @@ class PacketException(Exception):
 
 class Packet(object):
     """ Class proceed packet by protocol"""
+
+    prefix = "begin_data_prefix"
+    postfix = "end_data_postfix"
+    # other fields
     # is_begin
     # is_end
     # crc
     # data
     # data_len
-    # prefix
-    # postfix
-    #logger_name
 
     def __init__(self):
         # preinit
@@ -33,8 +34,6 @@ class Packet(object):
         self.crc = None
         self.data = ""
         self.data_len = None
-        self.prefix = "begin_data_prefix"
-        self.postfix = "end_data_postfix"
 
 
     def new_packet(self, part):
@@ -92,6 +91,7 @@ class Packet(object):
             self.is_begin = False
             self.is_end = False
             return None
+
         except:
             # if something at all wrong - skip packet
             logger = logging.getLogger(__name__)
@@ -99,3 +99,24 @@ class Packet(object):
             self.is_begin = False
             self.is_end = False
             return None
+
+
+    @staticmethod
+    def create_packet(data, part_size):
+        """ Create packet divided by parts with part_size from data """
+            # prepare data
+        data_len = "%i\n\r" % len(data)
+        header = "begin_data_prefix%s%s\n\r" % (data_len, binascii.crc32(data))
+        packet = "%s%send_data_postfix" % (header, data)
+
+        partheader_len = len(data_len)
+
+        beg = 0
+        end = part_size - partheader_len
+
+        result = []
+        while beg < len(packet):
+            block = packet[beg:beg+end]
+            result.append(data_len + block)
+            
+        return result

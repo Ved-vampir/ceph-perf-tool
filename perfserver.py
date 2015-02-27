@@ -183,7 +183,8 @@ def send_die_to_tools(ip_list, port):
 
 def copy_tool(ip_list, path, user):
     """ Copy tool and libs to specified ips on path"""
-    tool_names = ["perfcollect.py", "sysmets.py", "ceph_srv_info.py"]
+    tool_names = ["perfcollect.py", "sysmets.py", "ceph_srv_info.py",
+                  "sender.py", "packet.py"]
     for ip in ip_list:
         for tool in tool_names:
             full_path = os.path.join(path, tool)
