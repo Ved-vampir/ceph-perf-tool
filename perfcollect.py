@@ -264,7 +264,7 @@ def get_table_output(perf_list):
 
     # select group and counter names
     groups = {}
-    for node, value in perf_list.items():
+    for value in perf_list.values():
         for group, counters in value.items():
             groups.setdefault(group, set()).update(counters)
 
@@ -276,7 +276,7 @@ def get_table_output(perf_list):
         for counter in counters:
             row = []
             row.append(counter)
-            for key, value in perf_list.items():
+            for value in perf_list.values():
                 if group_name in value and counter in value[group_name]:
 
                     perf_val = value[group_name][counter]

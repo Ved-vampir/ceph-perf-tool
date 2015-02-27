@@ -10,6 +10,7 @@ For system metrics (cpu, memory, disk usage) required:
 
 For using as client-server for all ceph nodes listening required:
 
+    * sh
     * fabric
     * psutil
 
@@ -72,9 +73,9 @@ Server must have password-less ssh access for other nodes. Specify user, if you 
 Exit from server now is possible only via Ctrl+C (KeyboardInterrupt)
 
     perfserver.py [-h] [--port PORT] [--user USER] [--timeout TIMEOUT]
-                     [--partsize PARTSIZE] [--ceph CEPH] --pathtotool
-                     PATHTOTOOL [--savetofile SAVETOFILE] [--localip LOCALIP]
-                     [--sysmetrics] [--copytool]
+                     [--partsize PARTSIZE] [--ceph CEPH] --path-to-tool
+                     PATH_TO_TOOL [--save-to-file FILENAME] [--localip IP]
+                     [--sysmetrics] [--diff] [--copytool]
 
     Server for collecting perf counters from ceph nodes
 
@@ -83,18 +84,19 @@ Exit from server now is possible only via Ctrl+C (KeyboardInterrupt)
       --port PORT, -p PORT  Specify port for udp connection (9095 by default)
       --user USER, -u USER  User name for all hosts (root by default)
       --timeout TIMEOUT, -w TIMEOUT
-                            Max time in sec waiting for answers (30 by default)
+                            Time between collecting (5 by default)
       --partsize PARTSIZE, -b PARTSIZE
                             Part size for udp packet (4096 by default)
       --ceph CEPH, -c CEPH  Ceph command line command (ceph by default)
-      --pathtotool PATHTOTOOL, -t PATHTOTOOL
+      --path-to-tool PATH_TO_TOOL, -t PATH_TO_TOOL
                             Path to remote utility perfcollect.py
-      --savetofile SAVETOFILE, -s SAVETOFILE
+      --save-to-file FILENAME, -s FILENAME
                             Save output in file, filename required
-      --localip LOCALIP, -i LOCALIP
-                            Local ip for udp answer (if you don't specify it, not
+      --localip IP, -i IP   Local ip for udp answer (if you don't specify it, not
                             good net might be used)
       --sysmetrics, -m      Include info about cpu, memory and disk usage
+      --diff, -d            Get not counters values, but their difference time by
+                            time
       --copytool, -y        Copy tool to all nodes to path from -t
 
 

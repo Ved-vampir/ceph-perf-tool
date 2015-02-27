@@ -32,13 +32,13 @@ def listen_thread(port, part_size, result, term_event):
     sock.settimeout(0.5)
     all_data = {}
 
-    while True: 
+    while True:
 
         try:
             data, (remote_ip, remote_port) = sock.recvfrom(part_size)
 
             if remote_ip not in all_data:
-                all_data[remote_ip] = packet.Packet(LOGGER_NAME)
+                all_data[remote_ip] = packet.Packet()
 
             ready = all_data[remote_ip].new_packet(data)
 
@@ -71,9 +71,6 @@ def parse_command_args(argv):
     ag.add_argument("--partsize", "-b", type=int,
                     default=4096,
                     help="Part size for udp packet (4096 by default)")
-    ag.add_argument("--ceph", "-c", type=str,
-                    default="ceph",
-                    help="Ceph command line command (ceph by default)")
     # required params
     ag.add_argument("--path-to-tool", "-t", type=str, required=True,
                     metavar="PATH_TO_TOOL", dest="pathtotool",
@@ -121,10 +118,10 @@ def main(argv):
     args = parse_command_args(argv[1:])
 
     # find nodes
-    osd_list = get_osds_list(args.ceph)
-    osd_ip_list = get_osds_ips(osd_list, args.ceph)
-    mon_ip_list = get_mons_or_mds_ips(args.ceph, "mon")
-    mds_ip_list = get_mons_or_mds_ips(args.ceph, "mds")
+    osd_list = get_osds_list()
+    osd_ip_list = get_osds_ips(osd_list)
+    mon_ip_list = get_mons_or_mds_ips("mon")
+    mds_ip_list = get_mons_or_mds_ips("mds")
     ip_list = osd_ip_list | mon_ip_list | mds_ip_list
 
 

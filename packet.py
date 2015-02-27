@@ -9,6 +9,12 @@ import logging
 # packet part has format:
 # SIZE\n\rDATA
 
+
+class PacketException(Exception):
+    """ Exceptions from Packet"""
+    pass
+
+
 class Packet(object):
     """ Class proceed packet by protocol"""
     # is_begin
@@ -20,7 +26,7 @@ class Packet(object):
     # postfix
     #logger_name
 
-    def __init__(self, logger_name):
+    def __init__(self):
         # preinit
         self.is_begin = False
         self.is_end = False
@@ -29,7 +35,6 @@ class Packet(object):
         self.data_len = None
         self.prefix = "begin_data_prefix"
         self.postfix = "end_data_postfix"
-        self.logger_name = logger_name
 
 
     def new_packet(self, part):
@@ -59,7 +64,7 @@ class Packet(object):
 
             # bad size?
             if local_size != self.data_len:
-                raise Exception("Part size error")
+                raise PacketException("Part size error")
 
             # find postfix
             end = part.find(self.postfix)
@@ -72,24 +77,24 @@ class Packet(object):
             # check if it is end
             if self.is_end:
                 if self.data_len != len(self.data):
-                    raise Exception("Total size error")
+                    raise PacketException("Total size error")
                 if binascii.crc32(self.data) != self.crc:
-                    raise Exception("CRC error")
+                    raise PacketException("CRC error")
                 return self.data
             else:
                 return None
 
 
-        except Exception as e:
+        except PacketException as e:
             # if something wrong - skip packet
-            logger = logging.getLogger(self.logger_name)
+            logger = logging.getLogger(__name__)
             logger.warning("Packet skipped: %s", e)
             self.is_begin = False
             self.is_end = False
             return None
         except:
             # if something at all wrong - skip packet
-            logger = logging.getLogger(self.logger_name)
+            logger = logging.getLogger(__name__)
             logger.warning("Packet skipped: something is wrong")
             self.is_begin = False
             self.is_end = False
