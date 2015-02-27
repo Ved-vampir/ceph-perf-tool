@@ -30,10 +30,10 @@ This tool can be used localy for collection performance info from local ceph ins
 
 Tool has two modes: one call - one output and one call - multiply output (collecting of performance info by timer)
 
-    perfcollect.py [-h] [--json] [--table] [--schemaonly] [--sysmetrics]
-                      [--config CONFIG]
-                      [--collection COLLECTION [COLLECTION ...]]
-                      [--udp UDP UDP UDP] [--runpath RUNPATH]
+    perfcollect.py [-h] [--json] [--table] [--schema-only] [--sysmetrics]
+                      [--diff] [--config FILENAME]
+                      [--collection COUNTER_GROUP COUNTER1 COUNTER2 [COUNTER_GROUP COUNTER1 COUNTER2 ...]]
+                      [--remote UDP://IP:PORT/SIZE] [--runpath RUNPATH]
                       [--timeout TIMEOUT]
 
     Collect perf counters from ceph nodes
@@ -41,18 +41,21 @@ Tool has two modes: one call - one output and one call - multiply output (collec
     optional arguments:
       -h, --help            show this help message and exit
       --json, -j            Output in json format (true by default)
-      --table, -t           Output in table format (python-texttable required)
-      --schemaonly, -s      Return only schema
+      --table, -t           Output in table format (python-texttable required,
+                            work only in local mode and not for schema)
+      --schema-only, -s     Return only schema
       --sysmetrics, -m      Add info about cpu, memory and disk usage
-      --config CONFIG, -g CONFIG
+      --diff, -d            Return counters difference instead of value (work only
+                            in timeout mode)
+      --config FILENAME, -g FILENAME
                             Use it, if you want upload needed counter names from
                             file (json format, .counterslist as example)
-      --collection COLLECTION [COLLECTION ...], -c COLLECTION [COLLECTION ...]
+      --collection COUNTER_GROUP COUNTER1 COUNTER2 [COUNTER_GROUP COUNTER1 COUNTER2 ...], -c COUNTER_GROUP COUNTER1 COUNTER2 [COUNTER_GROUP COUNTER1 COUNTER2 ...]
                             Counter collections in format collection_name counter1
                             counter2 ...
-      --udp UDP UDP UDP, -u UDP UDP UDP
+      --remote UDP://IP:PORT/SIZE, -u UDP://IP:PORT/SIZE
                             Send result by UDP, specify host, port, packet part
-                            size
+                            size in bytes
       --runpath RUNPATH, -r RUNPATH
                             Path to ceph sockets (/var/run/ceph/ by default)
       --timeout TIMEOUT, -w TIMEOUT

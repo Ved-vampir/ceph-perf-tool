@@ -16,26 +16,25 @@ from fabric.api import env, run, hide, task, parallel
 from fabric.network import disconnect_all
 
 import packet
+import sender
+from logger import define_logger
 from ceph import get_osds_list, get_mons_or_mds_ips, get_osds_ips
 
 
 LOGGER_NAME = "io-perf-tool"
 
 
-def listen_thread(port, part_size, result, term_event):
+def listen_thread(udp_sender, result, term_event):
     """ Main listenig thread for socket
         Listen port, while waiting con_count answers
         Write answers to stdout or to file, if it specified """
 
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock.bind(("0.0.0.0", port))
-    sock.settimeout(0.5)
     all_data = {}
 
     while True:
 
         try:
-            data, (remote_ip, remote_port) = sock.recvfrom(part_size)
+            data, remote_ip = udp_sender.recv()
 
             if remote_ip not in all_data:
                 all_data[remote_ip] = packet.Packet()
@@ -45,7 +44,7 @@ def listen_thread(port, part_size, result, term_event):
             if ready is not None:
                 result.put(ready)
 
-        except socket.timeout:
+        except sender.Timeout:
             # no answer yet - check, if server want to kill us
             if term_event.is_set():
                 break
@@ -56,64 +55,49 @@ def listen_thread(port, part_size, result, term_event):
 
 def parse_command_args(argv):
     """ Command line argument parsing """
-    ag = argparse.ArgumentParser(description="Server for collecting"
-                                             " perf counters from ceph nodes")
+    arg = argparse.ArgumentParser(description="Server for collecting"
+                                              " perf counters from ceph nodes")
     # block with default values
-    ag.add_argument("--port", "-p", type=int,
-                    default=9095,
-                    help="Specify port for udp connection (9095 by default)")
-    ag.add_argument("--user", "-u", type=str,
-                    default="root",
-                    help="User name for all hosts (root by default)")
-    ag.add_argument("--timeout", "-w", type=int,
-                    default=5,
-                    help="Time between collecting (5 by default)")
-    ag.add_argument("--partsize", "-b", type=int,
-                    default=4096,
-                    help="Part size for udp packet (4096 by default)")
+    arg.add_argument("--port", "-p", type=int,
+                     default=9095,
+                     help="Specify port for udp connection (9095 by default)")
+    arg.add_argument("--user", "-u", type=str,
+                     default="root",
+                     help="User name for all hosts (root by default)")
+    arg.add_argument("--timeout", "-w", type=int,
+                     default=5,
+                     help="Time between collecting (5 by default)")
+    arg.add_argument("--partsize", "-b", type=int,
+                     default=4096,
+                     help="Part size for udp packet (4096 by default)")
     # required params
-    ag.add_argument("--path-to-tool", "-t", type=str, required=True,
-                    metavar="PATH_TO_TOOL", dest="pathtotool",
-                    help="Path to remote utility perfcollect.py")
+    arg.add_argument("--path-to-tool", "-t", type=str, required=True,
+                     metavar="PATH_TO_TOOL", dest="pathtotool",
+                     help="Path to remote utility perfcollect.py")
     # params with value
-    ag.add_argument("--save-to-file", "-s", type=str,
-                    metavar="FILENAME", dest="savetofile",
-                    help="Save output in file, filename required")
-    ag.add_argument("--localip", "-i", type=str,
-                    metavar="IP",
-                    help="Local ip for udp answer (if you don't specify it,"
-                         " not good net might be used)")
+    arg.add_argument("--save-to-file", "-s", type=str,
+                     metavar="FILENAME", dest="savetofile",
+                     help="Save output in file, filename required")
+    arg.add_argument("--localip", "-i", type=str,
+                     metavar="IP",
+                     help="Local ip for udp answer (if you don't specify it,"
+                          " not good net might be used)")
     # flag params
-    ag.add_argument("--sysmetrics", "-m", action="store_true",
-                    help="Include info about cpu, memory and disk usage")
-    ag.add_argument("--diff", "-d", action="store_true",
-                    help="Get not counters values, but their difference "
-                         "time by time")
-    ag.add_argument("--copytool", "-y", action="store_true",
-                    help="Copy tool to all nodes to path from -t")
+    arg.add_argument("--sysmetrics", "-m", action="store_true",
+                     help="Include info about cpu, memory and disk usage")
+    arg.add_argument("--diff", "-d", action="store_true",
+                     help="Get not counters values, but their difference "
+                          "time by time")
+    arg.add_argument("--copytool", "-y", action="store_true",
+                     help="Copy tool to all nodes to path from -t")
 
-    return ag.parse_args(argv)
-
-
-def define_logger():
-    """ Initialization of logger"""
-    logger = logging.getLogger(LOGGER_NAME)
-    logger.setLevel(logging.INFO)
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    logger.addHandler(ch)
-
-    log_format = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
-    formatter = logging.Formatter(log_format,
-                                  "%H:%M:%S")
-    ch.setFormatter(formatter)
-    return logger
+    return arg.parse_args(argv)
 
 
 def main(argv):
     """ Server starts from here """
     # start logging
-    logger = define_logger()
+    logger = define_logger(LOGGER_NAME)
     # parse command line
     args = parse_command_args(argv[1:])
 
@@ -130,10 +114,11 @@ def main(argv):
         copy_tool(ip_list, args.pathtotool, args.user)
 
     # start socket listening
+    udp_sender = sender.Sender(port=int(args.port), size=int(args.partsize))
     result = Queue.Queue()
     term_event = threading.Event()
     server = threading.Thread(target=listen_thread,
-                              args=(args.port, args.partsize,
+                              args=(udp_sender,
                                     result, term_event))
     try:
         server.start()
@@ -144,9 +129,11 @@ def main(argv):
 
         # supress connection to localhost
         cmd = prepare_tool_cmd(args)
+        localy = False
         if "127.0.0.1" in ip_list:
             start_tool_localy(cmd)
             ip_list.remove("127.0.0.1")
+            localy = True
 
         tools = threading.Thread(target=get_perfs_from_all_nodes,
                                  args=(args.user, cmd, ip_list))
@@ -167,18 +154,28 @@ def main(argv):
         logger.info("Finalization...")
         # kill our thread
         term_event.set()
+        # wait for server termination
+        server.join()
         # kill remote tool (if it is not killed yet)
-        send_die_to_tools(ip_list, args.port+1)
+        send_die_to_tools(ip_list, udp_sender, localy)
     else:
         term_event.set()
-        send_die_to_tools(ip_list, args.port+1)
+        server.join()
+        send_die_to_tools(ip_list, udp_sender, localy)
 
 
-def send_die_to_tools(ip_list, port):
+def send_die_to_tools(ip_list, udp_sender, localy=False):
     """ Send message to die to tools"""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    logger = logging.getLogger(LOGGER_NAME)
     for ip in ip_list:
-        sock.sendto("Time to die", (ip, port))
+        if not udp_sender.verified_send(ip, "Time to die"):
+            logger.error("Unsuccessfull die signal to %s", ip)
+        else:
+            logger.info("Successfully killed %s", ip)
+    if localy:
+        if not udp_sender.verified_send("127.0.0.1", "Time to die"):
+            logger.error("Unsuccessfull die signal to 127.0.0.1")
+
 
 
 def copy_tool(ip_list, path, user):

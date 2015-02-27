@@ -6,6 +6,7 @@ import logging
 import urlparse
 
 import packet
+from logger import define_logger
 
 
 class SenderException(Exception):
@@ -31,13 +32,14 @@ class Sender(object):
         if url is not None:
             data = urlparse.urlparse(url)
             # check schema
-            if data.scheme != "UDP":
+            if data.scheme != "udp":
+                mes = "Bad protocol type: %s instead of UDP" % data.scheme
+                logger.error(mes)
                 raise SenderException("Bad protocol type")
             # try to get port
             try:
                 int_port = int(data.port)
             except ValueError:
-                logger = logging.getLogger(__name__)
                 logger.error("Bad UDP port")
                 raise SenderException("Bad UDP port")
             # save paths
@@ -81,6 +83,7 @@ class Sender(object):
         for part in parts:
             self.send(part)
 
+
     def recv(self):
         """ Receive data from udp socket"""
         # check for binding
@@ -94,18 +97,49 @@ class Sender(object):
             raise Timeout()
 
 
-def define_logger():
-    """ Initialization of logger"""
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    logger.addHandler(ch)
+    def recv_with_answer(self, stop_event=None):
+        """ Receive data from udp socket and send 'ok' back
+            Command port = local port + 1
+            Answer port = local port
+            Waiting for command is blocking """
+        # create command socket
+        command_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        command_port = self.bindto[1]+1
+        command_sock.bind(("0.0.0.0", command_port))
+        command_sock.settimeout(1)
+        # try to recv
+        while True:
+            try:
+                data, (remote_ip, remote_port) = command_sock.recvfrom(self.size)
+                self.send("ok")
+                return data, remote_ip
+            except socket.timeout:
+                if stop_event is not None and stop_event.is_set():
+                    # return None if we are interrupted
+                    return None
 
-    log_format = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
-    formatter = logging.Formatter(log_format,
-                                  "%H:%M:%S")
-    ch.setFormatter(formatter)
-    return logger
 
-define_logger()
+    def verified_send(self, send_host, message, max_repeat=20):
+        """ Send and verify it by answer not more then max_repeat
+            Send port = local port + 1
+            Answer port = local port
+            Return True if send is verified """
+        # create send socket
+        send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        send_port = self.sendto[1]+1
+        logger = logging.getLogger(__name__)
+        for repeat in range(0, max_repeat):
+            send_sock.sendto(message, (send_host, send_port))
+            try:
+                data, remote_ip = self.recv()
+                if remote_ip == send_host and data == "ok":
+                    return True
+                else:
+                    logger.warning("No answer from %s, try %i", send_host, repeat)
+            except Timeout:
+                logger.warning("No answer from %s, try %i", send_host, repeat)
+
+        return False
+
+
+define_logger(__name__)

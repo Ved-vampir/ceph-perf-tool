@@ -15,9 +15,10 @@ from os.path import splitext, basename
 from daemonize import Daemonize
 
 import sender
+from logger import define_logger
 
 
-LOGGER_NAME = "io-perf-tool"
+LOGGER_NAME = "perfcollect_app"
 
 
 def parse_command_args(argv):
@@ -80,25 +81,10 @@ def parse_command_args(argv):
     return args
 
 
-def define_logger():
-    """ Initialization of logger"""
-    logger = logging.getLogger(LOGGER_NAME)
-    logger.setLevel(logging.INFO)
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    logger.addHandler(ch)
-
-    log_format = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
-    formatter = logging.Formatter(log_format,
-                                  "%H:%M:%S")
-    ch.setFormatter(formatter)
-    return logger
-
-
 def main():
     """ Main tool entry point """
     # init logger
-    logger = define_logger()
+    logger = define_logger(LOGGER_NAME)
     # get command line args
     args = parse_command_args(sys.argv[1:])
     if args is None:
@@ -123,28 +109,38 @@ def main():
 
     # if in cycle mode with udp output - start waiting for die
     if args.remote is not None and args.timeout is not None:
-        die_event = wait_for_die(udp_sender)
+        die_event, stop_event = wait_for_die(udp_sender)
 
     cache = None
 
-    while True:
-        # get metrics by timer
-        if args.schemaonly:
-            # Returns schemas of listed ceph creatures perfs
-            perf_list = get_perf_data(sock_list, "schema", args.runpath)
-        else:
-            # Returns perf dump of listed ceph creatures
-            perf_list = get_perf_data(sock_list, "dump", args.runpath)
-            if perf_counters is not None:
-                perf_list = select_counters(perf_counters, perf_list)
+    try:
+        while True:
+            # get metrics by timer
+            if args.schemaonly:
+                # Returns schemas of listed ceph creatures perfs
+                perf_list = get_perf_data(sock_list, "schema", args.runpath)
+            else:
+                # Returns perf dump of listed ceph creatures
+                perf_list = get_perf_data(sock_list, "dump", args.runpath)
+                if perf_counters is not None:
+                    perf_list = select_counters(perf_counters, perf_list)
 
-        if args.sysmetrics:
-            system_metrics = sysmets.get_system_metrics(args.runpath)
+            if args.sysmetrics:
+                system_metrics = sysmets.get_system_metrics(args.runpath)
 
-        if args.remote is None:
-            # local use
-            if not args.schemaonly and args.table:
-                print get_table_output(perf_list)
+            if args.remote is None:
+                # local use
+                if not args.schemaonly and args.table:
+                    print get_table_output(perf_list)
+                else:
+                    if args.sysmetrics:
+                        perf_list["system metrics"] = system_metrics
+                    if args.diff:
+                        new_data = perf_list
+                        perf_list = values_difference(cache, new_data)
+                        cache = new_data
+                    print get_json_output(perf_list)
+
             else:
                 if args.sysmetrics:
                     perf_list["system metrics"] = system_metrics
@@ -152,23 +148,24 @@ def main():
                     new_data = perf_list
                     perf_list = values_difference(cache, new_data)
                     cache = new_data
-                print get_json_output(perf_list)
+                send_by_udp(udp_sender, get_json_output(perf_list))
 
-        else:
-            if args.sysmetrics:
-                perf_list["system metrics"] = system_metrics
-            if args.diff:
-                new_data = perf_list
-                perf_list = values_difference(cache, new_data)
-                cache = new_data
-            send_by_udp(udp_sender, get_json_output(perf_list))
-
-        if args.timeout is None:
-            break
-        else:
-            if args.remote is not None and die_event.is_set():
+            if args.timeout is None:
                 break
-            time.sleep(args.timeout)
+            else:
+                if args.remote is not None and die_event.is_set():
+                    break
+                time.sleep(args.timeout)
+    except Exception as e:
+        # if anything wrong - need to kill thread
+        if stop_event is not None:
+            stop_event.set()
+        raise e
+    except BaseException as e:
+        # if anything wrong - need to kill thread
+        if stop_event is not None:
+            stop_event.set()
+        raise e
 
 
 def values_difference(cache, current):
@@ -314,23 +311,26 @@ def get_perfcounters_list_from_sysargs(args):
 def wait_for_die(udp_sender):
     """ Create socket in separate thread for to wait die signal"""
     die_event = threading.Event()
+    stop_event = threading.Event()
     server = threading.Thread(target=listening_thread,
-                              args=(udp_sender.sendto, die_event))
+                              args=(udp_sender, die_event, stop_event))
     server.start()
-    return die_event
+    return die_event, stop_event
 
 
-def listening_thread(host, port, die_event):
+def listening_thread(die_sender, die_event, stop_event):
     """ Wait message from parent and set event to die """
-    die_sender = sender.Sender(port)
+    # use port+1 because of conflict with server in case of local use
+    #die_sender = sender.Sender(port=port, host=host)
 
-    while True:
-        data, remote_ip = die_sender.recv()
-        if remote_ip == host:
+    command = die_sender.recv_with_answer(stop_event)
+    # check, that it is not interruption
+    if command is not None:
+        data, remote_ip = command
+        if remote_ip == die_sender.sendto[0]:
             logger = logging.getLogger(LOGGER_NAME)
             logger.info("Stopped by server with message: %s", data)
             die_event.set()
-            break
 
 
 if __name__ == '__main__':

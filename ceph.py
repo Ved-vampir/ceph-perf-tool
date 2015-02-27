@@ -4,8 +4,9 @@
 import json
 import logging
 
-
 import sh
+
+from logger import define_logger
 
 
 class CephException(Exception):
@@ -88,19 +89,4 @@ def get_osds_ips(osd_list):
         raise CephException("Execution error")
 
 
-def define_logger():
-    """ Initialization of logger"""
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    logger.addHandler(ch)
-
-    log_format = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
-    formatter = logging.Formatter(log_format,
-                                  "%H:%M:%S")
-    ch.setFormatter(formatter)
-    return logger
-
-
-define_logger()
+define_logger(__name__)

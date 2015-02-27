@@ -4,6 +4,8 @@
 import binascii
 import logging
 
+from logger import define_logger
+
 # packet has format:
 # begin_data_prefixSIZE\n\nDATAend_data_postfix
 # packet part has format:
@@ -106,8 +108,8 @@ class Packet(object):
         """ Create packet divided by parts with part_size from data """
             # prepare data
         data_len = "%i\n\r" % len(data)
-        header = "begin_data_prefix%s%s\n\r" % (data_len, binascii.crc32(data))
-        packet = "%s%send_data_postfix" % (header, data)
+        header = "%s%s%s\n\r" % (Packet.prefix, data_len, binascii.crc32(data))
+        packet = "%s%s%s" % (header, data, Packet.postfix)
 
         partheader_len = len(data_len)
 
@@ -118,5 +120,9 @@ class Packet(object):
         while beg < len(packet):
             block = packet[beg:beg+end]
             result.append(data_len + block)
-            
+            beg += end
+
         return result
+
+
+define_logger(__name__)
