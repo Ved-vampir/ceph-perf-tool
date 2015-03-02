@@ -2,7 +2,9 @@
 """ Ceph communications """
 
 import json
+import glob
 import logging
+from os.path import splitext, basename
 
 import sh
 
@@ -86,6 +88,41 @@ def get_osds_ips(osd_list):
     except:
         logger = logging.getLogger(__name__)
         logger.error("Ceph command 'osd find' execution error")
+        raise CephException("Execution error")
+
+
+def get_socket_list(path):
+    """ Returns list of sockets (ceph creatures) on node"""
+    sock_list = [splitext(basename(sock))[0]
+                 for sock in glob.glob(path + "*.asok")]
+    return sock_list
+
+
+def get_perf_data(socket_list, command, path):
+    """ Basic command to return schemas or dumps
+        of listed ceph creatures perfs"""
+    try:
+        res = {}
+        for sock in socket_list:
+            cmd = "%s/%s.asok" % (path, sock)
+            if command == "dump":
+                raw = sh.ceph.perf.dump(admin_daemon=cmd)
+            elif command == "schema":
+                raw = sh.ceph.perf.schema(admin_daemon=cmd)
+            else:
+                raise ParameterException("'%s' in get_perf_data"
+                                         " instead of dump/schema" % command)
+            res[sock] = json.loads(str(raw))
+
+        return res
+
+    except sh.CommandNotFound:
+        logger = logging.getLogger(__name__)
+        logger.error("Ceph command not found")
+        raise CephException("Command not found")
+    except:
+        logger = logging.getLogger(__name__)
+        logger.error("Ceph command '%s' execution error", cmd)
         raise CephException("Execution error")
 
 

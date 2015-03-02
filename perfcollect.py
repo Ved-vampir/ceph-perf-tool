@@ -4,17 +4,14 @@
 
 import sys
 import json
-import glob
 import time
 import logging
 import argparse
 import threading
-import subprocess
-from os.path import splitext, basename
 
 from daemonize import Daemonize
 
-
+import ceph
 import sender
 import sysmets
 from logger import define_logger
@@ -106,7 +103,7 @@ def main():
         perf_counters = None
 
     # get local ceph socket list
-    sock_list = get_socket_list(args.runpath)
+    sock_list = ceph.get_socket_list(args.runpath)
 
     # if in cycle mode with udp output - start waiting for die
     if args.remote is not None and args.timeout is not None:
@@ -120,10 +117,10 @@ def main():
             # get metrics by timer
             if args.schemaonly:
                 # Returns schemas of listed ceph creatures perfs
-                perf_list = get_perf_data(sock_list, "schema", args.runpath)
+                perf_list = ceph.get_perf_data(sock_list, "schema", args.runpath)
             else:
                 # Returns perf dump of listed ceph creatures
-                perf_list = get_perf_data(sock_list, "dump", args.runpath)
+                perf_list = ceph.get_perf_data(sock_list, "dump", args.runpath)
                 if perf_counters is not None:
                     perf_list = select_counters(perf_counters, perf_list)
 
@@ -189,30 +186,6 @@ def values_difference(cache, current):
                     for k, v in value.items():
                         diff[block][group][counter][k] = new_data[k] - v
     return diff
-
-
-
-def get_socket_list(path):
-    """ Returns list of sockets (ceph creatures) on node"""
-    sock_list = [splitext(basename(sock))[0]
-                 for sock in glob.glob(path + "*.asok")]
-    return sock_list
-
-
-def get_perf_data(socket_list, command, path):
-    """ Basic command to return schemas or dumps
-        of listed ceph creatures perfs"""
-    res = {}
-    for sock in socket_list:
-        cmd = "ceph --admin-daemon %s/%s.asok perf %s" % \
-                (path, sock, command)
-
-        PIPE = subprocess.PIPE
-        p = subprocess.Popen(cmd, shell=True, stdin=PIPE,
-                             stdout=PIPE, stderr=subprocess.STDOUT)
-        res[sock] = json.loads(p.stdout.read())
-
-    return res
 
 
 def select_counters(perf_counters, perf_list):
