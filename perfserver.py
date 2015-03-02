@@ -15,7 +15,6 @@ from fabric import tasks
 from fabric.api import env, run, hide, task, parallel
 from fabric.network import disconnect_all
 
-import packet
 import sender
 from logger import define_logger
 from ceph import get_osds_list, get_mons_or_mds_ips, get_osds_ips
@@ -29,17 +28,12 @@ def listen_thread(udp_sender, result, term_event):
         Listen port, while waiting con_count answers
         Write answers to stdout or to file, if it specified """
 
-    all_data = {}
 
     while True:
 
         try:
-            data, remote_ip = udp_sender.recv()
-
-            if remote_ip not in all_data:
-                all_data[remote_ip] = packet.Packet()
-
-            ready = all_data[remote_ip].new_packet(data)
+            # return not None, if packet is ready
+            ready = udp_sender.recv_by_protocol()
 
             if ready is not None:
                 result.put(ready)
@@ -181,7 +175,7 @@ def send_die_to_tools(ip_list, udp_sender, localy=False):
 def copy_tool(ip_list, path, user):
     """ Copy tool and libs to specified ips on path"""
     tool_names = ["perfcollect.py", "sysmets.py", "ceph_srv_info.py",
-                  "sender.py", "packet.py"]
+                  "sender.py", "packet.py", "logger.py"]
     for ip in ip_list:
         for tool in tool_names:
             full_path = os.path.join(path, tool)

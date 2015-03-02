@@ -59,6 +59,7 @@ class Sender(object):
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.binded = False
+        self.all_data = {}
 
 
     def bind(self):
@@ -95,6 +96,16 @@ class Sender(object):
             return data, remote_ip
         except socket.timeout:
             raise Timeout()
+
+
+    def recv_by_protocol(self):
+        """ Receive data from udp socket by Packet protocol"""
+        data, remote_ip = self.recv()
+
+        if remote_ip not in self.all_data:
+            self.all_data[remote_ip] = packet.Packet()
+
+        return self.all_data[remote_ip].new_packet(data)
 
 
     def recv_with_answer(self, stop_event=None):
