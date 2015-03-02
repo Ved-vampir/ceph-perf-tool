@@ -1,0 +1,5 @@
+sh
+msgpack-python
+daemonize
+psutil
+fabric
