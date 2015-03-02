@@ -14,7 +14,9 @@ from os.path import splitext, basename
 
 from daemonize import Daemonize
 
+
 import sender
+import sysmets
 from logger import define_logger
 
 
@@ -90,6 +92,7 @@ def main():
     if args is None:
         logger.error("Program terminated because of command line errors")
         exit(1)
+
     # prepare info for send
     if args.remote is not None:
         udp_sender = sender.Sender(url=args.remote)
@@ -102,10 +105,8 @@ def main():
     else:
         perf_counters = None
 
+    # get local ceph socket list
     sock_list = get_socket_list(args.runpath)
-
-    if args.sysmetrics:
-        import sysmets
 
     # if in cycle mode with udp output - start waiting for die
     if args.remote is not None and args.timeout is not None:
@@ -114,6 +115,7 @@ def main():
     cache = None
 
     try:
+
         while True:
             # get metrics by timer
             if args.schemaonly:
@@ -145,10 +147,15 @@ def main():
                 if args.sysmetrics:
                     perf_list["system metrics"] = system_metrics
                 if args.diff:
-                    new_data = perf_list
-                    perf_list = values_difference(cache, new_data)
-                    cache = new_data
-                send_by_udp(udp_sender, get_json_output(perf_list))
+                    if cache is not None:
+                        new_data = perf_list
+                        perf_list = values_difference(cache, new_data)
+                        cache = new_data
+                        send_by_udp(udp_sender, perf_list)
+                    else:
+                        cache = perf_list
+                else:
+                    send_by_udp(udp_sender, perf_list)
 
             if args.timeout is None:
                 break
@@ -157,11 +164,6 @@ def main():
                     break
                 time.sleep(args.timeout)
     except Exception as e:
-        # if anything wrong - need to kill thread
-        if stop_event is not None:
-            stop_event.set()
-        raise e
-    except BaseException as e:
         # if anything wrong - need to kill thread
         if stop_event is not None:
             stop_event.set()

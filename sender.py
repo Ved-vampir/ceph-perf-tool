@@ -60,6 +60,7 @@ class Sender(object):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.binded = False
         self.all_data = {}
+        self.send_packer = None
 
 
     def bind(self):
@@ -79,8 +80,11 @@ class Sender(object):
 
 
     def send_by_protocol(self, data):
-        """ Send data by Packet protocol"""
-        parts = packet.Packet.create_packet(data, self.size)
+        """ Send data by Packet protocol
+            data = dict"""
+        if self.send_packer is None:
+            self.send_packer = packet.Packet()
+        parts = self.send_packer.create_packet_v2(data, self.size)
         for part in parts:
             self.send(part)
 
