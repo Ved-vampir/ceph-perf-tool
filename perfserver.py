@@ -8,12 +8,13 @@ import socket
 import logging
 import argparse
 import threading
+import subprocess
 
 
-import psutil
-from fabric import tasks
-from fabric.api import env, run, hide, task, parallel
-from fabric.network import disconnect_all
+# import psutil
+# from fabric import tasks
+# from fabric.api import env, run, hide, task, parallel
+# from fabric.network import disconnect_all
 
 import sender
 from logger import define_logger
@@ -21,6 +22,10 @@ from ceph import get_osds_list, get_mons_or_mds_ips, get_osds_ips
 
 
 LOGGER_NAME = "io-perf-tool"
+
+
+def execute(cmd):
+    return subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
 
 
 def listen_thread(udp_sender, result, term_event):
@@ -102,10 +107,18 @@ def main(argv):
     mds_ip_list = get_mons_or_mds_ips("mds")
     ip_list = osd_ip_list | mon_ip_list | mds_ip_list
 
+    # locate myself
+    if args.localip is None:
+        args.localip = socket.gethostbyname_ex(socket.gethostname())[2][0]
+
+    localy = False
+    if args.localip in ip_list:
+        ip_list.remove(args.localip)
+        localy = True
 
     # copy tool, if user want
     if args.copytool:
-        copy_tool(ip_list, args.pathtotool, args.user)
+        copy_tool(ip_list, args.pathtotool, args.user, localy)
 
     # start socket listening
     udp_sender = sender.Sender(port=int(args.port), size=int(args.partsize))
@@ -123,15 +136,13 @@ def main(argv):
 
         # supress connection to localhost
         cmd = prepare_tool_cmd(args)
-        localy = False
-        if "127.0.0.1" in ip_list:
+        if localy:
             start_tool_localy(cmd)
-            ip_list.remove("127.0.0.1")
-            localy = True
 
-        tools = threading.Thread(target=get_perfs_from_all_nodes,
-                                 args=(args.user, cmd, ip_list))
-        tools.start()
+        # tools = threading.Thread(target=get_perfs_from_all_nodes,
+        #                          args=(args.user, cmd, ip_list))
+        # tools.start()
+        get_perfs_from_all_nodes(args.user, cmd, ip_list)
 
         while True:
             # without any timeout KeyboardInterrupt will not raise
@@ -151,14 +162,14 @@ def main(argv):
         # wait for server termination
         server.join()
         # kill remote tool (if it is not killed yet)
-        send_die_to_tools(ip_list, udp_sender, localy)
+        send_die_to_tools(ip_list, udp_sender, localy, args.localip)
     else:
         term_event.set()
         server.join()
         send_die_to_tools(ip_list, udp_sender, localy)
 
 
-def send_die_to_tools(ip_list, udp_sender, localy=False):
+def send_die_to_tools(ip_list, udp_sender, localy=False, localip=""):
     """ Send message to die to tools"""
     logger = logging.getLogger(LOGGER_NAME)
     for ip in ip_list:
@@ -167,24 +178,31 @@ def send_die_to_tools(ip_list, udp_sender, localy=False):
         else:
             logger.info("Successfully killed %s", ip)
     if localy:
-        if not udp_sender.verified_send("127.0.0.1", "Time to die"):
-            logger.error("Unsuccessfull die signal to 127.0.0.1")
+        if not udp_sender.verified_send(localip, "Time to die"):
+            logger.error("Unsuccessfull die signal to  %s", localip)
 
 
 
-def copy_tool(ip_list, path, user):
+def copy_tool(ip_list, path, user, localy=False):
     """ Copy tool and libs to specified ips on path"""
     tool_names = ["perfcollect.py", "sysmets.py", "ceph_srv_info.py",
-                  "sender.py", "packet.py", "logger.py", "ceph.py"]
+                  "sender.py", "packet.py", "logger.py", "ceph.py",
+                  "daemonize.py", "umsgpack.py", "sh.py"]
     for ip in ip_list:
         for tool in tool_names:
             full_path = os.path.join(path, tool)
             cmd = "scp %s %s@%s:%s" % (tool, user, ip, full_path)
-            p = psutil.Popen(cmd, shell=True)
-            p.wait()
-            if p.returncode != 0:
-                logger = logging.getLogger(LOGGER_NAME)
-                logger.error("Unsuccessfull copy to %s", ip)
+            execute(cmd)
+    if localy:
+        for tool in tool_names:
+            full_path = os.path.join(path, tool)
+            cmd = "cp {0} {1}".format(tool, full_path)
+            execute(cmd)
+            # p = psutil.Popen(cmd, shell=True)
+            # p.wait()
+            # if p.returncode != 0:
+            #     logger = logging.getLogger(LOGGER_NAME)
+            #     logger.error("Unsuccessfull copy to %s", ip)
 
 
 def prepare_tool_cmd(args):
@@ -196,10 +214,6 @@ def prepare_tool_cmd(args):
     timeout = args.timeout
     sysmets = args.sysmetrics
     get_diff = args.diff
-
-    # locate myself
-    if local_ip is None:
-        local_ip = socket.gethostbyname_ex(socket.gethostname())[2][0]
 
     # prepare args
     params = "-u UDP://%s:%s/%s -w %i" % (local_ip, port, part_size, timeout)
@@ -214,33 +228,37 @@ def prepare_tool_cmd(args):
 
 def start_tool_localy(cmd):
     """ Start tool localy on current node """
-    psutil.Popen(cmd, shell=True)
+    #psutil.Popen(cmd, shell=True)
+    execute(cmd)
 
 
-@task
-@parallel
-def get_perfs_from_one_node(cmd):
-    """ Start local tool on node with specified params """
-    try:
-        run(cmd)
-    except KeyboardInterrupt:
-        # way to stop server
-        return
+# @task
+# @parallel
+# def get_perfs_from_one_node(cmd):
+#     """ Start local tool on node with specified params """
+#     try:
+#         run(cmd)
+#     except KeyboardInterrupt:
+#         # way to stop server
+#         return
 
 
 def get_perfs_from_all_nodes(user, cmd, ip_list):
     """ Start tool from path on every ip in ip_list
         Access by user, answer on port
         Return system metrics also, if sysmets=True """
-    # supress fabric output
-    with hide('output', 'running', 'warnings', 'status', 'aborts'):
+    # # supress fabric output
+    # with hide('output', 'running', 'warnings', 'status', 'aborts'):
 
-        # setup fabric
-        env.user = user
-        env.hosts = ip_list
+    #     # setup fabric
+    #     env.user = user
+    #     env.hosts = ip_list
 
-        tasks.execute(get_perfs_from_one_node, cmd=cmd)
-        disconnect_all()
+    #     tasks.execute(get_perfs_from_one_node, cmd=cmd)
+    #     disconnect_all()
+    for ip in ip_list:
+        ssh = "ssh {0}@{1} {2}".format(user, ip, cmd)
+        execute(ssh)
 
 if __name__ == '__main__':
     exit(main(sys.argv))

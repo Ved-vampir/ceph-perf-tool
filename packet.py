@@ -7,7 +7,7 @@ import json
 import binascii
 import logging
 
-import msgpack
+import umsgpack as msgpack
 
 from logger import define_logger
 

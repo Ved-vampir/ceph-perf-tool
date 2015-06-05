@@ -13,7 +13,7 @@ from daemonize import Daemonize
 
 import ceph
 import sender
-import sysmets
+# import sysmets
 from logger import define_logger
 
 
@@ -89,6 +89,9 @@ def main():
     if args is None:
         logger.error("Program terminated because of command line errors")
         exit(1)
+
+    if args.sysmetrics:
+        import sysmets
 
     # prepare info for send
     if args.remote is not None:
