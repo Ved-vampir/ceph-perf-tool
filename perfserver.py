@@ -8,7 +8,6 @@ import socket
 import logging
 import argparse
 import threading
-import subprocess
 
 
 # import psutil
@@ -17,15 +16,12 @@ import subprocess
 # from fabric.network import disconnect_all
 
 import sender
+from sender import execute
 from logger import define_logger
 from ceph import get_osds_list, get_mons_or_mds_ips, get_osds_ips
 
 
 LOGGER_NAME = "io-perf-tool"
-
-
-def execute(cmd):
-    return subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
 
 
 def listen_thread(udp_sender, result, term_event):
@@ -223,6 +219,7 @@ def prepare_tool_cmd(args):
         params += " -d"
 
     cmd = "python %s/perfcollect.py %s" % (path, params)
+
     return cmd
 
 

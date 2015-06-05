@@ -4,9 +4,14 @@
 import socket
 import logging
 import urlparse
+import subprocess
 
 import packet
 from logger import define_logger
+
+
+def execute(cmd):
+    return subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
 
 
 class SenderException(Exception):
@@ -42,6 +47,7 @@ class Sender(object):
             except ValueError:
                 logger.error("Bad UDP port")
                 raise SenderException("Bad UDP port")
+
             # save paths
             self.sendto = (data.hostname, int_port)
             self.bindto = (data.hostname, int_port)
@@ -57,11 +63,18 @@ class Sender(object):
             self.bindto = ("0.0.0.0", port)
             self.size = size
 
+        # create access
+        access = "iptables -I INPUT -p udp --dport {0} -j ACCEPT".format(self.sendto[1])
+        execute(access)
+        self.clear_access = "iptables -D INPUT -p udp --dport {0} -j ACCEPT".format(self.sendto[1])
+
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.binded = False
         self.all_data = {}
         self.send_packer = None
 
+    def __del__(self):
+        execute(self.clear_access)
 
     def bind(self):
         """ Prepare for listening """
