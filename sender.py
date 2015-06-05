@@ -64,9 +64,14 @@ class Sender(object):
             self.size = size
 
         # create access
-        access = "iptables -I INPUT -p udp --dport {0} -j ACCEPT".format(self.sendto[1])
-        execute(access)
-        self.clear_access = "iptables -D INPUT -p udp --dport {0} -j ACCEPT".format(self.sendto[1])
+        final_port = self.sendto[1]
+        answer_port = final_port+1
+        access = "iptables -I INPUT -p udp -m multiport --dports {0},{1} -j ACCEPT".format(final_port, answer_port)
+        try:
+            execute(access)
+        except Exception:
+            logger.warning("May be, port will be unavailable - can't create rule")
+        self.clear_access = "iptables -D INPUT -p udp -m multiport --dports {0},{1} -j ACCEPT".format(final_port, answer_port)
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.binded = False

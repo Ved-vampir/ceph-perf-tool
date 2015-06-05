@@ -3,6 +3,7 @@
 
 import os
 import sys
+import time
 import Queue
 import socket
 import logging
@@ -85,6 +86,9 @@ def parse_command_args(argv):
                           "time by time")
     arg.add_argument("--copytool", "-y", action="store_true",
                      help="Copy tool to all nodes to path from -t")
+    arg.add_argument("--totaltime", "-a", type=int,
+                     help="Total time in secs to collect (if None - server "
+                          "never stop itself)")
 
     return arg.parse_args(argv)
 
@@ -125,6 +129,7 @@ def main(argv):
                                     result, term_event))
     try:
         server.start()
+        start_time = time.time()
 
         # begin to collect counters
 
@@ -141,15 +146,27 @@ def main(argv):
         get_perfs_from_all_nodes(args.user, cmd, ip_list)
 
         while True:
-            # without any timeout KeyboardInterrupt will not raise
-            really_big_timeout = sys.maxint
-            data = result.get(timeout=really_big_timeout)
-            # proceed returned data
-            if args.savetofile is None:
-                logger.info(data)
+            # stop if timeout is setted
+            if args.totaltime is not None:
+                time_now = time.time() - start_time
+                if time_now > args.totaltime:
+                    raise KeyboardInterrupt()
+                # wait not more than remaining
+                really_big_timeout = args.totaltime - time_now
             else:
-                with open(args.savetofile, 'a') as f:
-                    f.write(data)
+                # without any timeout KeyboardInterrupt will not raise
+                really_big_timeout = sys.maxint
+            try:
+                data = result.get(timeout=really_big_timeout)
+                # proceed returned data
+                if args.savetofile is None:
+                    logger.info(data)
+                else:
+                    with open(args.savetofile, 'a') as f:
+                        f.write(data)
+            except Queue.Empty:
+                # no matter - timeout finish before info come
+                continue
     # my not very good way to exit :(
     except KeyboardInterrupt:
         logger.info("Finalization...")
