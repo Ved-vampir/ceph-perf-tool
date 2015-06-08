@@ -163,6 +163,7 @@ def main(argv):
                     logger.info(data)
                 else:
                     with open(args.savetofile, 'a') as f:
+                        f.write("\n---\n")
                         f.write(data)
             except Queue.Empty:
                 # no matter - timeout finish before info come
