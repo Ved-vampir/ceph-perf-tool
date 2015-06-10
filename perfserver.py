@@ -17,7 +17,7 @@ import threading
 # from fabric.network import disconnect_all
 
 import sender
-from sender import execute
+from sender import execute, ExecuteError
 from logger import define_logger
 from ceph import get_osds_list, get_mons_or_mds_ips, get_osds_ips
 
@@ -116,6 +116,9 @@ def main(argv):
         ip_list.remove(args.localip)
         localy = True
 
+    # test connection
+    test_ips(ip_list)
+
     # copy tool, if user want
     if args.copytool:
         copy_tool(ip_list, args.pathtotool, args.user, localy)
@@ -196,27 +199,45 @@ def send_die_to_tools(ip_list, udp_sender, localy=False, localip=""):
             logger.error("Unsuccessfull die signal to  %s", localip)
 
 
+def test_ips(ip_list):
+    """ Ping all ips to understand that they are reachable """
+    logger = logging.getLogger(LOGGER_NAME)
+    ips = set(ip_list)
+    cmd = "ping  -c 1 -w 2 {0} > /dev/null 2>&1"
+    for ip in ips:
+        try:
+            execute(cmd.format(ip))
+        except ExecuteError:
+            ip_list.remove(ip)
+            logger.warning("Ip %s is unreachable, exclude it", ip)
+    ip_list = ips
+
 
 def copy_tool(ip_list, path, user, localy=False):
     """ Copy tool and libs to specified ips on path"""
+    logger = logging.getLogger(LOGGER_NAME)
     tool_names = ["perfcollect.py", "sysmets.py", "ceph_srv_info.py",
                   "sender.py", "packet.py", "logger.py", "ceph.py",
                   "daemonize.py", "umsgpack.py", "sh.py"]
+    bad_ips = []
     for ip in ip_list:
-        for tool in tool_names:
-            full_path = os.path.join(path, tool)
-            cmd = "scp %s %s@%s:%s" % (tool, user, ip, full_path)
-            execute(cmd)
+        try:
+            for tool in tool_names:
+                full_path = os.path.join(path, tool)
+                cmd = "scp %s %s@%s:%s" % (tool, user, ip, full_path)
+                execute(cmd)
+        except ExecuteError:
+            logger.warning("Cannot do copy on ip %s, exclude it.", ip)
+            bad_ips.append(ip)
+
+    if len(bad_ips) > 0:
+        ip_list = [ip for ip in ip_list if ip not in bad_ips]
+
     if localy:
         for tool in tool_names:
             full_path = os.path.join(path, tool)
             cmd = "cp {0} {1}".format(tool, full_path)
             execute(cmd)
-            # p = psutil.Popen(cmd, shell=True)
-            # p.wait()
-            # if p.returncode != 0:
-            #     logger = logging.getLogger(LOGGER_NAME)
-            #     logger.error("Unsuccessfull copy to %s", ip)
 
 
 def prepare_tool_cmd(args):

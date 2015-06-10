@@ -5,6 +5,7 @@ import socket
 import logging
 import urlparse
 import subprocess
+from subprocess import CalledProcessError as ExecuteError
 
 import packet
 from logger import define_logger
