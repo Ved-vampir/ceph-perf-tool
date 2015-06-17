@@ -143,9 +143,6 @@ def main(argv):
         if localy:
             start_tool_localy(cmd)
 
-        # tools = threading.Thread(target=get_perfs_from_all_nodes,
-        #                          args=(args.user, cmd, ip_list))
-        # tools.start()
         get_perfs_from_all_nodes(args.user, cmd, ip_list)
 
         while True:

@@ -101,27 +101,32 @@ def get_socket_list(path):
 def get_perf_data(socket_list, command, path):
     """ Basic command to return schemas or dumps
         of listed ceph creatures perfs"""
+    logger = logging.getLogger(__name__)
     try:
         res = {}
         for sock in socket_list:
-            cmd = "%s/%s.asok" % (path, sock)
-            if command == "dump":
-                raw = sh.ceph.perf.dump(admin_daemon=cmd)
-            elif command == "schema":
-                raw = sh.ceph.perf.schema(admin_daemon=cmd)
-            else:
-                raise ParameterException("'%s' in get_perf_data"
-                                         " instead of dump/schema" % command)
-            res[sock] = json.loads(str(raw))
+            try:
+                cmd = "%s/%s.asok" % (path, sock)
+                # if command == "dump":
+                #     raw = sh.ceph.perf.dump(admin_daemon=cmd)
+                # elif command == "schema":
+                #     raw = sh.ceph.perf.schema(admin_daemon=cmd)
+                # else:
+                #     raise ParameterException("'%s' in get_perf_data"
+                #                              " instead of dump/schema" % command)
+                raw = sh.ceph(command, admin_daemon=cmd)
+                res[sock] = json.loads(str(raw))
+            except sh.ErrorReturnCode_22:
+                # no such command for this daemon - it's normal,
+                # because I don't filter commands by types (osd/mon)
+                logger.warning("No command %s for socket %s", command, sock)
 
         return res
 
     except sh.CommandNotFound:
-        logger = logging.getLogger(__name__)
         logger.error("Ceph command not found")
         raise CephException("Command not found")
     except:
-        logger = logging.getLogger(__name__)
         logger.error("Ceph command '%s' execution error", cmd)
         raise CephException("Execution error")
 
