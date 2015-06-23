@@ -10,14 +10,8 @@ import logging
 import argparse
 import threading
 
-
-# import psutil
-# from fabric import tasks
-# from fabric.api import env, run, hide, task, parallel
-# from fabric.network import disconnect_all
-
 import sender
-from sender import execute, ExecuteError
+from execute import execute, ExecuteError
 from logger import define_logger
 from ceph import get_osds_list, get_mons_or_mds_ips, get_osds_ips
 
@@ -89,17 +83,16 @@ def parse_command_args(argv):
     arg.add_argument("--totaltime", "-a", type=int,
                      help="Total time in secs to collect (if None - server "
                           "never stop itself)")
+    arg.add_argument("--extradata", "-e", action="store_true",
+                    help="To collect common data about cluster "
+                         " (logs, confs, etc)")
 
     return arg.parse_args(argv)
 
 
-def main(argv):
-    """ Server starts from here """
-    # start logging
-    logger = define_logger(LOGGER_NAME)
-    # parse command line
-    args = parse_command_args(argv[1:])
-
+def real_main(args, term_event):
+    """Server starts from here"""
+    logger = logging.getLogger(LOGGER_NAME)
     # find nodes
     osd_list = get_osds_list()
     osd_ip_list = get_osds_ips(osd_list)
@@ -126,64 +119,86 @@ def main(argv):
     # start socket listening
     udp_sender = sender.Sender(port=int(args.port), size=int(args.partsize))
     result = Queue.Queue()
-    term_event = threading.Event()
     server = threading.Thread(target=listen_thread,
                               args=(udp_sender,
                                     result, term_event))
-    try:
-        server.start()
-        start_time = time.time()
+    server.start()
+    start_time = time.time()
+    if args.totaltime is not None:
+        logger.info("Tests will be finished in a %d sec", args.totaltime)
 
-        # begin to collect counters
+    # begin to collect counters
 
-        logger.info("Now waiting for answer... Use Ctrl+C for exit.")
+    # supress connection to localhost
+    cmd = prepare_tool_cmd(args)
+    if localy:
+        start_tool_localy(cmd)
 
-        # supress connection to localhost
-        cmd = prepare_tool_cmd(args)
-        if localy:
-            start_tool_localy(cmd)
+    get_perfs_from_all_nodes(args.user, cmd, ip_list)
 
-        # tools = threading.Thread(target=get_perfs_from_all_nodes,
-        #                          args=(args.user, cmd, ip_list))
-        # tools.start()
-        get_perfs_from_all_nodes(args.user, cmd, ip_list)
+    logger.info("Collect daemons started, now waiting for answer...")
 
-        while True:
-            # stop if timeout is setted
-            if args.totaltime is not None:
-                time_now = time.time() - start_time
-                if time_now > args.totaltime:
-                    raise KeyboardInterrupt()
-                # wait not more than remaining
-                really_big_timeout = args.totaltime - time_now
+    while not term_event.is_set():
+        # stop if timeout is setted
+        if args.totaltime is not None:
+            time_now = time.time() - start_time
+            if time_now > args.totaltime:
+                # term_event for other threads
+                term_event.set()
+                logger.info("Test time is over")
+                break
+            # wait not more than remaining
+            really_big_timeout = args.totaltime - time_now
+        else:
+            # without any timeout KeyboardInterrupt will not raise
+            really_big_timeout = sys.maxint
+        try:
+            data = result.get(timeout=really_big_timeout)
+            # proceed returned data
+            if args.savetofile is None:
+                logger.info(data)
             else:
-                # without any timeout KeyboardInterrupt will not raise
-                really_big_timeout = sys.maxint
-            try:
-                data = result.get(timeout=really_big_timeout)
-                # proceed returned data
-                if args.savetofile is None:
-                    logger.info(data)
-                else:
-                    with open(args.savetofile, 'a') as f:
-                        f.write("\n---\n")
-                        f.write(data)
-            except Queue.Empty:
-                # no matter - timeout finish before info come
-                continue
-    # my not very good way to exit :(
+                with open(args.savetofile, 'a') as f:
+                    f.write("\n---\n")
+                    f.write(data)
+        except Queue.Empty:
+            # no matter - timeout finish before info come
+            continue
+
+    # wait for server termination
+    server.join()
+    # kill remote tool (if it is not killed yet)
+    send_die_to_tools(ip_list, udp_sender, localy, args.localip)
+    if args.extradata:
+        collect_extra_results(ip_list, args.user, localy)
+
+
+def main(argv):
+    """ Shell for main because of ctrl-c exit """
+    # start logging
+    logger = define_logger(LOGGER_NAME)
+    # parse command line
+    args = parse_command_args(argv[1:])
+    # create termination event
+    term_event = threading.Event()
+    # start main thread
+    main_thread = threading.Thread(target=real_main,
+                                   args=(args, term_event))
+    main_thread.start()
+    logger.info("Main thread is started... Use Ctrl+C for exit.")
+
+    try:
+        # this part only waits for ctrl+c
+        # or for timeout termination from main thread
+        while not term_event.is_set():
+            pass
+
     except KeyboardInterrupt:
         logger.info("Finalization...")
-        # kill our thread
+        # kill our threads
         term_event.set()
         # wait for server termination
-        server.join()
-        # kill remote tool (if it is not killed yet)
-        send_die_to_tools(ip_list, udp_sender, localy, args.localip)
-    else:
-        term_event.set()
-        server.join()
-        send_die_to_tools(ip_list, udp_sender, localy)
+        main_thread.join()
 
 
 def send_die_to_tools(ip_list, udp_sender, localy=False, localip=""):
@@ -218,7 +233,7 @@ def copy_tool(ip_list, path, user, localy=False):
     logger = logging.getLogger(LOGGER_NAME)
     tool_names = ["perfcollect.py", "sysmets.py", "ceph_srv_info.py",
                   "sender.py", "packet.py", "logger.py", "ceph.py",
-                  "daemonize.py", "umsgpack.py", "sh.py"]
+                  "daemonize.py", "umsgpack.py", "sh.py", "execute.py"]
     bad_ips = []
     for ip in ip_list:
         try:
@@ -240,6 +255,28 @@ def copy_tool(ip_list, path, user, localy=False):
             execute(cmd)
 
 
+def collect_extra_results(ip_list, user, localy=False):
+    """ Get extra results archives from all nodes """
+    logger = logging.getLogger(LOGGER_NAME)
+    os.mkdir("results_{0}".format(time.time()))
+    arch_path = "/tmp/extra_data.tar.gz"
+    copy_name = "results/{0}.tar.gz"
+    for ip in ip_list:
+        try:
+            real_name = copy_name.format(ip)
+            cmd = "scp %s@%s:%s %s" % (user, ip, arch_path, real_name)
+            execute(cmd)
+        except ExecuteError:
+            logger.warning("Cannot copy results from ip %s, skip it.", ip)
+
+    if localy:
+        real_name = copy_name.format("localhost")
+        cmd = "cp {0} {1}".format(arch_path, real_name)
+        execute(cmd)
+
+    logger.info("Extra data is stored in results folder")
+
+
 def prepare_tool_cmd(args):
     """ Return params for tool start"""
     path = args.pathtotool
@@ -249,6 +286,7 @@ def prepare_tool_cmd(args):
     timeout = args.timeout
     sysmets = args.sysmetrics
     get_diff = args.diff
+    extra_data = args.extradata
 
     # prepare args
     params = "-u UDP://%s:%s/%s -w %i" % (local_ip, port, part_size, timeout)
@@ -256,6 +294,8 @@ def prepare_tool_cmd(args):
         params += " -m"
     if get_diff:
         params += " -d"
+    if extra_data:
+        params += " -e"
 
     cmd = "python %s/perfcollect.py %s" % (path, params)
 
@@ -264,34 +304,14 @@ def prepare_tool_cmd(args):
 
 def start_tool_localy(cmd):
     """ Start tool localy on current node """
-    #psutil.Popen(cmd, shell=True)
     execute(cmd)
-
-
-# @task
-# @parallel
-# def get_perfs_from_one_node(cmd):
-#     """ Start local tool on node with specified params """
-#     try:
-#         run(cmd)
-#     except KeyboardInterrupt:
-#         # way to stop server
-#         return
 
 
 def get_perfs_from_all_nodes(user, cmd, ip_list):
     """ Start tool from path on every ip in ip_list
         Access by user, answer on port
         Return system metrics also, if sysmets=True """
-    # # supress fabric output
-    # with hide('output', 'running', 'warnings', 'status', 'aborts'):
 
-    #     # setup fabric
-    #     env.user = user
-    #     env.hosts = ip_list
-
-    #     tasks.execute(get_perfs_from_one_node, cmd=cmd)
-    #     disconnect_all()
     for ip in ip_list:
         ssh = "ssh {0}@{1} {2}".format(user, ip, cmd)
         execute(ssh)

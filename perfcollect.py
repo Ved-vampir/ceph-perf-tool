@@ -2,12 +2,17 @@
 
 """ Local utility for collecting perf counters and system info """
 
+import os
 import sys
 import json
 import time
+import glob
+import tarfile
 import logging
 import argparse
 import threading
+
+from contextlib import closing
 
 from daemonize import Daemonize
 
@@ -18,6 +23,16 @@ from logger import define_logger
 
 
 LOGGER_NAME = "perfcollect_app"
+
+extra_data_commands = [
+    ("config", "show"),
+    ("mon_status"),
+    ("status"),
+    ("dump_op_pq_state"),
+    ("dump_watchers"),
+    ("dump_blacklist"),
+    ("dump_ops_in_flight"),
+    ("dump_historic_ops")]
 
 
 def parse_command_args(argv):
@@ -43,6 +58,9 @@ def parse_command_args(argv):
     ag.add_argument("--diff", "-d", action="store_true",
                     help="Return counters difference instead of value"
                          " (work only in timeout mode)")
+    ag.add_argument("--extradata", "-e", action="store_true",
+                    help="To collect common data about cluster "
+                         " (logs, confs, etc)")
     # strings
     ag.add_argument("--config", "-g", type=str,
                     metavar="FILENAME",
@@ -93,6 +111,12 @@ def main():
     if args.sysmetrics:
         import sysmets
 
+    # prepare folder for extradata
+    if args.extradata:
+        dirname = "/tmp/perfcollect{0}".format(time.time())
+        os.mkdir(dirname)
+
+
     # prepare info for send
     if args.remote is not None:
         udp_sender = sender.Sender(url=args.remote)
@@ -111,6 +135,8 @@ def main():
     # if in cycle mode with udp output - start waiting for die
     if args.remote is not None and args.timeout is not None:
         die_event, stop_event = wait_for_die(udp_sender)
+    else:
+        stop_event = None
 
     cache = None
 
@@ -120,15 +146,18 @@ def main():
             # get metrics by timer
             if args.schemaonly:
                 # Returns schemas of listed ceph creatures perfs
-                perf_list = ceph.get_perf_data(sock_list, "schema", args.runpath)
+                perf_list = ceph.get_perf_data(sock_list, ("perf", "schema"), args.runpath)
             else:
                 # Returns perf dump of listed ceph creatures
-                perf_list = ceph.get_perf_data(sock_list, "dump", args.runpath)
+                perf_list = ceph.get_perf_data(sock_list, ("perf", "dump"), args.runpath)
                 if perf_counters is not None:
                     perf_list = select_counters(perf_counters, perf_list)
 
             if args.sysmetrics:
                 system_metrics = sysmets.get_system_metrics(args.runpath)
+
+            if args.extradata:
+                save_extra_data(sock_list, args.runpath, dirname)
 
             if args.remote is None:
                 # local use
@@ -168,6 +197,35 @@ def main():
         if stop_event is not None:
             stop_event.set()
         raise e
+
+    # save logs if needed
+    # and make archive
+    if args.extradata:
+        save_logs(dirname)
+        with closing(tarfile.open("/tmp/extra_data.tar.gz", "w:gz")) as tar:
+            tar.add(dirname)
+
+
+def save_extra_data(socket_list, run_path, dirname):
+    """ Get and save extradata to files"""
+    cur_time = time.time()
+    frmt = "{0} : {1} :\n{2}"
+    for command in extra_data_commands:
+        data_list = ceph.get_perf_data(socket_list, command, run_path)
+        for sock in data_list.keys():
+            with open(os.path.join(dirname, sock), "a") as f:
+                fmt_data = frmt.format(cur_time, command, data_list[sock])
+                f.write(fmt_data)
+
+
+def save_logs(dirname):
+    """ Prepare ceph logs to copy"""
+    logs_path = "/var/log/ceph/*.log"
+    logs_name = "logs.tar.gz"
+    full_path = os.path.join(dirname, logs_name)
+    with closing(tarfile.open(full_path, "w:gz")) as tar:
+        for f in glob.glob(logs_path):
+            tar.add(f)
 
 
 def values_difference(cache, current):
