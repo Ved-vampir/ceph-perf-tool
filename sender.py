@@ -4,15 +4,10 @@
 import socket
 import logging
 import urlparse
-import subprocess
-from subprocess import CalledProcessError as ExecuteError
 
 import packet
 from logger import define_logger
-
-
-def execute(cmd):
-    return subprocess.check_output(cmd, stderr=subprocess.STDOUT, shell=True)
+from execute import execute, ExecuteError
 
 
 class SenderException(Exception):

@@ -4,12 +4,15 @@
 
 import os
 import sys
-import path
 import json
 import time
+import glob
+import tarfile
 import logging
 import argparse
 import threading
+
+from contextlib import closing
 
 from daemonize import Daemonize
 
@@ -110,7 +113,7 @@ def main():
 
     # prepare folder for extradata
     if args.extradata:
-        dirname = "perfcollect{0}".format(time.time())
+        dirname = "/tmp/perfcollect{0}".format(time.time())
         os.mkdir(dirname)
 
 
@@ -132,6 +135,8 @@ def main():
     # if in cycle mode with udp output - start waiting for die
     if args.remote is not None and args.timeout is not None:
         die_event, stop_event = wait_for_die(udp_sender)
+    else:
+        stop_event = None
 
     cache = None
 
@@ -150,6 +155,9 @@ def main():
 
             if args.sysmetrics:
                 system_metrics = sysmets.get_system_metrics(args.runpath)
+
+            if args.extradata:
+                save_extra_data(sock_list, args.runpath, dirname)
 
             if args.remote is None:
                 # local use
@@ -190,6 +198,13 @@ def main():
             stop_event.set()
         raise e
 
+    # save logs if needed
+    # and make archive
+    if args.extradata:
+        save_logs(dirname)
+        with closing(tarfile.open("/tmp/extra_data.tar.gz", "w:gz")) as tar:
+            tar.add(dirname)
+
 
 def save_extra_data(socket_list, run_path, dirname):
     """ Get and save extradata to files"""
@@ -197,13 +212,20 @@ def save_extra_data(socket_list, run_path, dirname):
     frmt = "{0} : {1} :\n{2}"
     for command in extra_data_commands:
         data_list = ceph.get_perf_data(socket_list, command, run_path)
-        for sock in socket_list:
-            with open(path.join(dirname, sock), "a") as f:
+        for sock in data_list.keys():
+            with open(os.path.join(dirname, sock), "a") as f:
                 fmt_data = frmt.format(cur_time, command, data_list[sock])
                 f.write(fmt_data)
 
 
-def save_logs()
+def save_logs(dirname):
+    """ Prepare ceph logs to copy"""
+    logs_path = "/var/log/ceph/*.log"
+    logs_name = "logs.tar.gz"
+    full_path = os.path.join(dirname, logs_name)
+    with closing(tarfile.open(full_path, "w:gz")) as tar:
+        for f in glob.glob(logs_path):
+            tar.add(f)
 
 
 def values_difference(cache, current):

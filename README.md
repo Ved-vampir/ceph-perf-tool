@@ -2,16 +2,10 @@
 
 ##Preusage notes
 
-For working only with local per-node util with json output of ceph perf counters no additional libraries required.  
+For main program capabilities no additional libraries required.  
 
 For system metrics (cpu, memory, disk usage) required:
 
-    * psutil
-
-For using as client-server for all ceph nodes listening required:
-
-    * sh
-    * fabric
     * psutil
 
 For table output required:
@@ -19,6 +13,8 @@ For table output required:
     * texttable
 
 Client-server works with ssh, so, you need to have password-less access for all ceph nodes from "main" node, where server is started.
+For Fuel env controller node will be the good choice.
+Ceph must be installed on node, from which you start server.
 
 Data is sent by udp on specified by used (or 9095 by default) port - take care about network access.
 
@@ -30,37 +26,37 @@ This tool can be used localy for collection performance info from local ceph ins
 
 Tool has two modes: one call - one output and one call - multiply output (collecting of performance info by timer)
 
-    perfcollect.py [-h] [--json] [--table] [--schema-only] [--sysmetrics]
-                      [--diff] [--config FILENAME]
-                      [--collection COUNTER_GROUP COUNTER1 COUNTER2 [COUNTER_GROUP COUNTER1 COUNTER2 ...]]
-                      [--remote UDP://IP:PORT/SIZE] [--runpath RUNPATH]
-                      [--timeout TIMEOUT]
+    perfserver.py [-h] [--port PORT] [--user USER] [--timeout TIMEOUT]
+                         [--partsize PARTSIZE] --path-to-tool PATH_TO_TOOL
+                         [--save-to-file FILENAME] [--localip IP] [--sysmetrics]
+                         [--diff] [--copytool] [--totaltime TOTALTIME]
+                         [--extradata]
 
-    Collect perf counters from ceph nodes
+    Server for collecting perf counters from ceph nodes
 
     optional arguments:
       -h, --help            show this help message and exit
-      --json, -j            Output in json format (true by default)
-      --table, -t           Output in table format (python-texttable required,
-                            work only in local mode and not for schema)
-      --schema-only, -s     Return only schema
-      --sysmetrics, -m      Add info about cpu, memory and disk usage
-      --diff, -d            Return counters difference instead of value (work only
-                            in timeout mode)
-      --config FILENAME, -g FILENAME
-                            Use it, if you want upload needed counter names from
-                            file (json format, .counterslist as example)
-      --collection COUNTER_GROUP COUNTER1 COUNTER2 [COUNTER_GROUP COUNTER1 COUNTER2 ...], -c COUNTER_GROUP COUNTER1 COUNTER2 [COUNTER_GROUP COUNTER1 COUNTER2 ...]
-                            Counter collections in format collection_name counter1
-                            counter2 ...
-      --remote UDP://IP:PORT/SIZE, -u UDP://IP:PORT/SIZE
-                            Send result by UDP, specify host, port, packet part
-                            size in bytes
-      --runpath RUNPATH, -r RUNPATH
-                            Path to ceph sockets (/var/run/ceph/ by default)
+      --port PORT, -p PORT  Specify port for udp connection (9095 by default)
+      --user USER, -u USER  User name for all hosts (root by default)
       --timeout TIMEOUT, -w TIMEOUT
-                            If specified, tool will work in cycle with specified
-                            timeout in secs
+                            Time between collecting (5 by default)
+      --partsize PARTSIZE, -b PARTSIZE
+                            Part size for udp packet (4096 by default)
+      --path-to-tool PATH_TO_TOOL, -t PATH_TO_TOOL
+                            Path to remote utility perfcollect.py
+      --save-to-file FILENAME, -s FILENAME
+                            Save output in file, filename required
+      --localip IP, -i IP   Local ip for udp answer (if you don't specify it, not
+                            good net might be used)
+      --sysmetrics, -m      Include info about cpu, memory and disk usage
+      --diff, -d            Get not counters values, but their difference time by
+                            time
+      --copytool, -y        Copy tool to all nodes to path from -t
+      --totaltime TOTALTIME, -a TOTALTIME
+                            Total time in secs to collect (if None - server never
+                            stop itself)
+      --extradata, -e       To collect common data about cluster (logs, confs,
+                            etc)
 
     Note, if you don't use both -c and -g options, all counters will be collected.
 
@@ -75,10 +71,11 @@ Server must have password-less ssh access for other nodes. Specify user, if you 
 
 Exit from server now is possible only via Ctrl+C (KeyboardInterrupt)
 
-    perfserver.py [-h] [--port PORT] [--user USER] [--timeout TIMEOUT]
-                     [--partsize PARTSIZE] [--ceph CEPH] --path-to-tool
-                     PATH_TO_TOOL [--save-to-file FILENAME] [--localip IP]
-                     [--sysmetrics] [--diff] [--copytool]
+        perfserver.py [-h] [--port PORT] [--user USER] [--timeout TIMEOUT]
+                         [--partsize PARTSIZE] --path-to-tool PATH_TO_TOOL
+                         [--save-to-file FILENAME] [--localip IP] [--sysmetrics]
+                         [--diff] [--copytool] [--totaltime TOTALTIME]
+                         [--extradata]
 
     Server for collecting perf counters from ceph nodes
 
@@ -90,7 +87,6 @@ Exit from server now is possible only via Ctrl+C (KeyboardInterrupt)
                             Time between collecting (5 by default)
       --partsize PARTSIZE, -b PARTSIZE
                             Part size for udp packet (4096 by default)
-      --ceph CEPH, -c CEPH  Ceph command line command (ceph by default)
       --path-to-tool PATH_TO_TOOL, -t PATH_TO_TOOL
                             Path to remote utility perfcollect.py
       --save-to-file FILENAME, -s FILENAME
@@ -101,10 +97,23 @@ Exit from server now is possible only via Ctrl+C (KeyboardInterrupt)
       --diff, -d            Get not counters values, but their difference time by
                             time
       --copytool, -y        Copy tool to all nodes to path from -t
+      --totaltime TOTALTIME, -a TOTALTIME
+                            Total time in secs to collect (if None - server never
+                            stop itself)
+      --extradata, -e       To collect common data about cluster (logs, confs,
+                            etc)
+
 
 
 
 ##Example
+
+The full-function call
+    python perfserver.py -y -i 192.168.0.4 -p 9989 -t ~ -s test.log -a 10 -e
+
+    It will copy tool to home directory of alll nodes, bind to ip 192.168.0.4:9989, will collect data during 10 sec to test.log file and also get additional information from all nodes (it will be stored in archive in local directory on server).
+
+If you have used flag '-y' once, you can don't use it later, if you are sure, that perfcollect tool was not deleted on all nodes. This can be used to prevent new copying and save some time. If you don't want to take care about it, use '-y' flag always.
 
 Start server on 9096 port with coping of tool to home root directory, get counters difference and others values by default
 
@@ -114,3 +123,12 @@ Start server on default port with system metrics getting and file output, get re
 
     python perfserver.py -t ~ -w 30 -s test.out -m
 
+Example with output:
+    python perfserver.py -y -i 192.168.0.4 -p 9989 -t ~ -s test.log -a 10 -e
+    16:08:20 - INFO - io-perf-tool - Main thread is started... Use Ctrl+C for exit.
+    16:08:30 - INFO - io-perf-tool - Tests will be finished in a 10 sec
+    16:08:32 - INFO - io-perf-tool - Collect daemons started, now waiting for answer...
+    16:08:40 - INFO - io-perf-tool - Test time is over
+    16:08:40 - INFO - io-perf-tool - Successfully killed 192.168.0.11
+    16:08:40 - INFO - io-perf-tool - Successfully killed 192.168.0.5
+    16:08:40 - INFO - io-perf-tool - Extra data is stored in results folder
