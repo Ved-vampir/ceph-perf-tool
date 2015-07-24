@@ -1,5 +1,6 @@
 """ Execute cmd """
 
+import subprocess
 from subprocess import CalledProcessError as ExecuteError
 
 try:
