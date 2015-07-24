@@ -258,9 +258,10 @@ def copy_tool(ip_list, path, user, localy=False):
 def collect_extra_results(ip_list, user, localy=False):
     """ Get extra results archives from all nodes """
     logger = logging.getLogger(LOGGER_NAME)
-    os.mkdir("results_{0}".format(time.time()))
+    resname = "results_{0}".format(time.time())
+    os.mkdir(resname)
     arch_path = "/tmp/extra_data.tar.gz"
-    copy_name = "results/{0}.tar.gz"
+    copy_name = resname + "/{0}.tar.gz"
     for ip in ip_list:
         try:
             real_name = copy_name.format(ip)
@@ -274,7 +275,7 @@ def collect_extra_results(ip_list, user, localy=False):
         cmd = "cp {0} {1}".format(arch_path, real_name)
         execute(cmd)
 
-    logger.info("Extra data is stored in results folder")
+    logger.info("Extra data is stored in results folder %s", resname)
 
 
 def prepare_tool_cmd(args):
