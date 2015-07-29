@@ -5,7 +5,7 @@ import json
 import texttable
 
 
-filterok = [""]
+filterok = ["queue", "latency"]
 filterno = ["max", "min"]
 
 logname = "test.log"
@@ -52,10 +52,12 @@ def filter_data():
                                 oldval = saved.setdefault(node+group+c, [0, 0])
                                 s = val["sum"]-oldval[0]
                                 n = val["avgcount"]-oldval[1]
+                                saved[node+group+c] = [val["sum"], val["avgcount"]]
                                 if n != 0:
                                     val = float(s)/(n)
                                 else:
                                     val = 0.0
+                                
                                 # if val["avgcount"] != 0:
                                 #     val = float(val["sum"])/val["avgcount"]
                                 # else:

@@ -53,5 +53,3 @@ docs/_build/
 # PyBuilder
 target/
 
-res*
-resexamples/!res*
