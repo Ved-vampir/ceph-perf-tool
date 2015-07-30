@@ -1,4 +1,5 @@
 import re
+import os
 import sys
 import json
 
@@ -7,6 +8,10 @@ import texttable
 
 filterok = ["queue", "latency"]
 filterno = ["max", "min"]
+
+schema = {"avg": {"format": "[{0[avg]}, {0[dev]}]", "header": "[avg, dev]"},
+          "per": {"format": "[{0[p50]}, {0[p95]}]", "header": "[percentile 50%, 95%]"},
+          "other": {"format": "[{0[max]:.5f}, {0[min]:.15f}, {0[avg]:.5f}]", "header": "[max, min, avg]"}}
 
 logname = "test.log"
 
@@ -31,6 +36,33 @@ def ok(word, filter_ok, filter_no):
     return False
 
 
+def get_type(name):
+    avg_metrics = ["queue"]
+    per_metrics = ["latency"]
+    for m in avg_metrics:
+        if m in name:
+            return "avg"
+    for m in per_metrics:
+        if m in name:
+            return "per"
+    return "other"
+
+
+
+def med_dev(vals, med):
+    dev = ((sum(abs(med - i) ** 2 for i in vals) / len(vals)) ** 0.5)
+    return dev
+
+
+def percetile(vals, p):
+    indf = p * len(vals) / 100.0
+    ind = int(round(indf))
+    if indf == ind:
+        # print len(vals), ind
+        return (vals[ind - 1] + vals[ind]) / 2.0
+    else:
+        return vals[ind - 1]
+
 
 def filter_data():
     fdata = {}
@@ -48,6 +80,7 @@ def filter_data():
                     for c in cs.keys():
                         if ok(c, filterok, filterno):
                             val = data[node][group][c]
+
                             if isinstance(val, dict):
                                 oldval = saved.setdefault(node+group+c, [0, 0])
                                 s = val["sum"]-oldval[0]
@@ -57,11 +90,8 @@ def filter_data():
                                     val = float(s)/(n)
                                 else:
                                     val = 0.0
-                                
-                                # if val["avgcount"] != 0:
-                                #     val = float(val["sum"])/val["avgcount"]
-                                # else:
-                                #     val = 0.0
+                            # if c == "commitcycle_latency" and "7" in node:
+                            #     print val
                             nodedata = fdata.setdefault(node, {})
                             groupdata = nodedata.setdefault(group, {})
                             if c not in groupdata:
@@ -71,21 +101,25 @@ def filter_data():
                                 groupdata[c]["avg"] = val
                                 groupdata[c]["max"] = val
                                 groupdata[c]["min"] = val
+                                groupdata[c]["val"] = [val]
                             else:
                                 groupdata[c]["sum"] += val
                                 groupdata[c]["count"] += 1
-                                s = float(groupdata[c]["sum"])
-                                if groupdata[c]["count"] != 0:
-                                    groupdata[c]["avg"] = s / groupdata[c]["count"]
-                                else:
-                                    groupdata[c]["avg"] = 0.0
+                                groupdata[c]["val"].append(val)
+                                # s = float(groupdata[c]["sum"])
+                                # if groupdata[c]["count"] != 0:
+                                #     groupdata[c]["avg"] = s / groupdata[c]["count"]
+                                # else:
+                                #     groupdata[c]["avg"] = 0.0
                                 if val > groupdata[c]["max"]:
                                     groupdata[c]["max"] = val
-                                if val < groupdata[c]["min"]:
+                                if val < groupdata[c]["min"] and val > 0:
                                     groupdata[c]["min"] = val
     return fdata
 
 def save_results(fdata):
+    if not os.path.exists("resses"):
+        os.mkdir("resses")
     header = {}
 
     rowkeys = [key for key in natural_sort(fdata.keys()) if "osd" in key]
@@ -93,9 +127,21 @@ def save_results(fdata):
         for name, groups in nodedata.items():
             line = header.setdefault(name, set())
             for cn, cs in groups.items():
+                # compute avg etc
+                s = float(cs["sum"])
+                if cs["count"] != 0:
+                    cs["avg"] = s / cs["count"]
+                else:
+                    cs["avg"] = 0.0
+                cs["dev"] = med_dev(cs["val"], cs["avg"])
+                pdata = sorted(cs["val"])
+                cs["p50"] = percetile(pdata, 50)
+                cs["p95"] = percetile(pdata, 95)
+                # del common data
                 cs.pop("sum")
                 cs.pop("count")
                 if cs["avg"] != 0:
+                    # hl = get_type(cn)
                     line.add(cn)
 
     tdata = {key: [] for key in header.keys()}
@@ -105,7 +151,7 @@ def save_results(fdata):
             newrow = [rowkey.split(".")[1]]
             for counter in counters:
                 if group in nodedata:
-                    frmt = "max: {0[max]:.5f}\nmin: {0[min]:.5f}\navg: {0[avg]:.5f}"
+                    frmt = schema[get_type(counter)]["format"]
                     newrow.append(frmt.format(nodedata[group][counter]))
                 else:
                     newrow.append('')
@@ -120,11 +166,11 @@ def save_results(fdata):
         tab.header = cur_header
         for row in value:
             tab.add_row(row)
-        with  open("res_table_{0}".format(group), "w") as res:
+        with  open("resses/res_table_{0}".format(group), "w") as res:
             res.write(tab.draw())
 
 
-    with open("res_json", "w") as res:
+    with open("resses/res_json", "w") as res:
         res.write(json.dumps(fdata, indent=2))
 
 
