@@ -9,9 +9,9 @@ import texttable
 filterok = ["queue", "latency"]
 filterno = ["max", "min"]
 
-schema = {"avg": {"format": "[{0[avg]}, {0[dev]}]", "header": "[avg, dev]"},
-          "per": {"format": "[{0[p50]}, {0[p95]}]", "header": "[percentile 50%, 95%]"},
-          "other": {"format": "[{0[max]:.5f}, {0[min]:.15f}, {0[avg]:.5f}]", "header": "[max, min, avg]"}}
+schema = {"avg": {"format": "[{0[avg]:.3g}, {0[dev]:.3g}]", "header": "[avg, dev]"},
+          "per": {"format": "[{0[p50]:.3g}, {0[p95]:.3g}]", "header": "[50%, 95%]"},
+          "other": {"format": "[{0[max]:.3g}, {0[min]:.3g}, {0[avg]:.3g}]", "header": "[max, min, avg]"}}
 
 logname = "test.log"
 
@@ -106,11 +106,6 @@ def filter_data():
                                 groupdata[c]["sum"] += val
                                 groupdata[c]["count"] += 1
                                 groupdata[c]["val"].append(val)
-                                # s = float(groupdata[c]["sum"])
-                                # if groupdata[c]["count"] != 0:
-                                #     groupdata[c]["avg"] = s / groupdata[c]["count"]
-                                # else:
-                                #     groupdata[c]["avg"] = 0.0
                                 if val > groupdata[c]["max"]:
                                     groupdata[c]["max"] = val
                                 if val < groupdata[c]["min"] and val > 0:
@@ -161,7 +156,8 @@ def save_results(fdata):
         tab = texttable.Texttable(1000)
         tab.set_deco(tab.HEADER | tab.VLINES | tab.BORDER | tab.HLINES)
         cur_header = ["osd / {0}".format(group)]
-        cur_header.extend(header[group])
+        cur_header.extend("{0}\n{1}".format(h, schema[get_type(h)]["header"])
+                          for h in header[group])
         tab.add_row(cur_header)
         tab.header = cur_header
         for row in value:
