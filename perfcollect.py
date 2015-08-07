@@ -18,6 +18,7 @@ from daemonize import Daemonize
 
 import ceph
 import sender
+import system
 # import sysmets
 from logger import define_logger
 
@@ -173,6 +174,7 @@ def main():
                     print get_json_output(perf_list)
 
             else:
+                perf_list["time"] = time.time()
                 if args.sysmetrics:
                     perf_list["system metrics"] = system_metrics
                 if args.diff:
@@ -216,6 +218,11 @@ def save_extra_data(socket_list, run_path, dirname):
             with open(os.path.join(dirname, sock), "a") as f:
                 fmt_data = frmt.format(cur_time, command, data_list[sock])
                 f.write(fmt_data)
+    sysdata = system.collect_system_data()
+    with open(os.path.join(dirname, "systemdata"), "a") as f:
+        fmt_data = frmt.format(cur_time, "sysdata", sysdata)
+        f.write(fmt_data)
+
 
 
 def save_logs(dirname):
